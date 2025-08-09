@@ -154,7 +154,6 @@ async def plan_answer(user_id: int, question: str) -> str:
         oa.responses.create,
         model="gpt-5",            # stronger model for better reasoning
         input=messages,
-        temperature=0.3,
         max_output_tokens=500,
     )
     return getattr(resp, "output_text", "").strip()
