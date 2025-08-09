@@ -186,7 +186,6 @@ async def final_answer(user_id: int, question: str, plan: str) -> str:
         oa.responses.create,
         model="gpt-5",
         input=messages,
-        temperature=0.35,
         max_output_tokens=900,
     )
     return getattr(resp, "output_text", "Sorry, I couldn’t generate an answer just now.").strip()
