@@ -182,33 +182,23 @@ def faq_snippets(question: str) -> List[str]:
 # OpenAI Helpers
 # =========================
 def extract_output_text(resp) -> str:
-    """
-    Robustly extract text from Responses API result.
-    Guarantees a string (possibly empty), never None.
-    """
     txt = getattr(resp, "output_text", None)
     if isinstance(txt, str) and txt.strip():
         return txt.strip()
 
-    # Fallback parse
     try:
-        out = getattr(resp, "output", None) or []
         parts = []
+        out = getattr(resp, "output", None) or []
         for block in out:
             content = getattr(block, "content", None) or []
             for item in content:
-                val = getattr(item, "text", "") or ""
-                if val:
-                    parts.append(val)
-        combined = "\n".join(p for p in parts if p).strip()
+                for field in ("text", "content", "output_text"):
+                    val = getattr(item, field, "") or ""
+                    if isinstance(val, str) and val.strip():
+                        parts.append(val.strip())
+        combined = "\n".join(parts).strip()
         if combined:
             return combined
-    except Exception:
-        pass
-
-    # As last resort: do not return JSON, just empty string
-    try:
-        _ = resp.to_dict()  # for debugging if you want to print
     except Exception:
         pass
 
