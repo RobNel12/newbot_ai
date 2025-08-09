@@ -216,17 +216,17 @@ def extract_output_text(resp) -> str:
 
 
 async def oa_call(messages, max_output_tokens: int) -> str:
-    """
-    Calls the Responses API in a thread (blocking-safe), returns extracted text.
-    Avoids unsupported params like temperature for gpt-5 family.
-    """
     resp = await asyncio.to_thread(
         oa.responses.create,
         model="gpt-5",
         input=messages,
         max_output_tokens=max_output_tokens,
     )
-    return extract_output_text(resp)
+    text = extract_output_text(resp)
+    if not text.strip():
+        # Debugging — print raw dict so we can see structure
+        logging.warning(f"Empty text; raw resp: {json.dumps(resp.to_dict(), indent=2)[:800]}")
+    return text
 
 
 async def plan_answer(user_id: int, question: str) -> str:
