@@ -1,8 +1,9 @@
+# newbbot_ai.py
 import os
-import re
+import json
 import asyncio
 from collections import deque, defaultdict
-from typing import List, Tuple
+from typing import List
 
 import discord
 from dotenv import load_dotenv
@@ -28,20 +29,18 @@ oa = OpenAI(api_key=OPENAI_API_KEY)
 
 # ----------------- Knowledge & Memory -----------------
 SEED_TIPS = [
-    "Parry → riposte is your bread-and-butter. Parry *late*, not early.",
-    "Footwork > mouse aim: backstep to make swings whiff; use strafes to change hitboxes.",
+    "Parry → riposte is your bread-and-butter. Parry late, not early.",
+    "Footwork > mouse aim: backstep to make swings whiff; strafe to change hitboxes.",
     "Manage stamina: feints and missed swings drain fast; force opponents to whiff.",
     "Maintain spacing: step out after your hit to avoid trades.",
     "In 1vX: keep enemies in one arc; rotate around the ‘outside’ opponent."
 ]
 
-# Short rolling memory per user (keeps context tight)
 RECENT_QA = defaultdict(lambda: deque(maxlen=6))
 
-# Light “crib notes” we can reference for consistency (not patch-specific)
 CANON_FAQ = {
     "parry": [
-        "Center your crosshair on the incoming weapon and parry *late* as it enters release.",
+        "Center your crosshair on the incoming weapon and parry late as it enters release.",
         "Immediately queue your riposte; don't windup first—use riposte’s built-in timing."
     ],
     "feint": [
@@ -57,7 +56,7 @@ CANON_FAQ = {
         "Carry a bandage for sustain; take perks after core armor is set."
     ],
     "aim": [
-        "Practice ‘drags’/‘accels’ sparingly; fundamentals (distance, stamina) win first.",
+        "Practice drags/accels sparingly; fundamentals (distance, stamina) win first.",
         "Use private duels vs bots to groove parry cadence before pubs."
     ],
 }
@@ -69,25 +68,23 @@ bot = discord.Client(intents=intents)
 
 def is_help_context(ch: discord.abc.GuildChannel) -> bool:
     """True if message is in the help channel or a thread under it (incl. forum posts)."""
-    # main text channel
     if isinstance(ch, discord.TextChannel) and ch.id == HELP_CHANNEL_ID:
         return True
-    # thread under a text or forum channel
     if isinstance(ch, discord.Thread) and (ch.parent_id == HELP_CHANNEL_ID):
         return True
-    # if it's a post in a ForumChannel, messages appear as threads; covered above
     return False
 
 def strip_bot_mention(content: str, bot_user: discord.ClientUser) -> str:
     """Remove bot mention tokens and trim."""
-    tokens = content.split()
-    cleaned = [t for t in tokens if t not in (f"<@{bot_user.id}>", f"<@!{bot_user.id}>")]
-    return " ".join(cleaned).strip()
+    if not bot_user:
+        return content.strip()
+    cleaned = content.replace(f"<@{bot_user.id}>", "").replace(f"<@!{bot_user.id}>", "")
+    return cleaned.strip()
 
-# ----------------- Sophisticated coaching prompts -----------------
+# ----------------- Prompting -----------------
 SYSTEM_CORE = (
     f"You are '{BOT_DISPLAY_NAME}', an expert Mordhau mentor for new players. "
-    "You teach fundamentals first, emphasize safety, spacing, stamina, and timing. "
+    "Teach fundamentals first; emphasize safety, spacing, stamina, and timing. "
     "Be concise but rich with value. Use lists and short steps. Avoid patch-volatile claims—"
     "if unsure, state how to verify in-game."
 )
@@ -104,8 +101,8 @@ STYLE_RULES = (
 
 ANTI_HALLUCINATION = (
     "If a question requires exact numbers or current patch specifics and you’re not certain, "
-    "say you’re unsure and give an in-game way to check (e.g., ‘test in a duel server’). "
-    "Never invent exploits, cheats, or private info. Refuse harassment/cheating requests."
+    "say you’re unsure and give an in-game way to check. "
+    "Never invent exploits/cheats. Refuse harassment/cheating requests."
 )
 
 def faq_snippets(question: str) -> List[str]:
@@ -114,7 +111,6 @@ def faq_snippets(question: str) -> List[str]:
     for k in CANON_FAQ:
         if k in q:
             keys.append(k)
-    # also keyword heuristics
     if any(w in q for w in ("parry", "riposte", "chamber")) and "parry" not in keys:
         keys.append("parry")
     if any(w in q for w in ("1v", "1vx", "outnumber", "gank")) and "1vx" not in keys:
@@ -125,14 +121,61 @@ def faq_snippets(question: str) -> List[str]:
         keys.append("loadout")
     if any(w in q for w in ("aim", "drag", "accel", "mouse")) and "aim" not in keys:
         keys.append("aim")
-    # Flatten to lines
     lines = []
     for k in keys:
         lines.extend(CANON_FAQ[k])
     return lines
 
-async def plan_answer(user_id: int, question: str) -> str:
-    """First pass: produce a structured plan (outline + key bullets)."""
+# ----------------- Safe extraction helpers -----------------
+def extract_output_text(resp) -> str:
+    """
+    Robustly extract text from Responses API result.
+    Guarantees a non-empty string or "".
+    """
+    # Preferred property on newer SDKs
+    txt = getattr(resp, "output_text", None)
+    if isinstance(txt, str) and txt.strip():
+        return txt.strip()
+
+    # Fallback: iterate generic structure
+    try:
+        out = getattr(resp, "output", None) or []
+        parts = []
+        for block in out:
+            content = getattr(block, "content", None) or []
+            for item in content:
+                # Some SDKs expose type/text; others just have a 'text' field
+                t = getattr(item, "type", None)
+                if t == "output_text":
+                    val = getattr(item, "text", "") or ""
+                    if val:
+                        parts.append(val)
+                else:
+                    # Attempt generic text attr
+                    val = getattr(item, "text", "") or ""
+                    if val:
+                        parts.append(val)
+        combined = "\n".join(p for p in parts if p).strip()
+        if combined:
+            return combined
+    except Exception:
+        pass
+
+    # Last resort: stringify JSON to inspect
+    try:
+        s = json.dumps(resp.to_dict())
+        # crude scrape of "text" fields
+        # keep it short if giant
+        if s:
+            # Not returning raw JSON to users; we still return ""
+            pass
+    except Exception:
+        pass
+
+    return ""
+
+async def oa_plan(user_id: int, question: str) -> str:
+    """Planner pass (outline)."""
     history = list(RECENT_QA[user_id])
     messages = [
         {"role": "system", "content": SYSTEM_CORE},
@@ -152,25 +195,24 @@ async def plan_answer(user_id: int, question: str) -> str:
 
     resp = await asyncio.to_thread(
         oa.responses.create,
-        model="gpt-5",            # stronger model for better reasoning
+        model="gpt-5",
         input=messages,
+        # temperature removed (unsupported on some models)
         max_output_tokens=500,
     )
-    return getattr(resp, "output_text", "").strip()
+    return extract_output_text(resp)
 
-async def final_answer(user_id: int, question: str, plan: str) -> str:
-    """Second pass: produce the polished, structured answer using the plan."""
+async def oa_final(user_id: int, question: str, plan: str) -> str:
+    """Final pass (structured answer)."""
     history = list(RECENT_QA[user_id])
     messages = [
         {"role": "system", "content": SYSTEM_CORE},
         {"role": "developer", "content": STYLE_RULES},
         {"role": "developer", "content": ANTI_HALLUCINATION},
         {"role": "developer", "content": "Use crisp formatting (bullets/numbered lists). Keep it beginner-friendly."},
-        {"role": "developer", "content": f"Here is your plan. Follow it closely:\n{plan}"},
+        {"role": "developer", "content": f"Here is your plan. Follow it closely:\n{plan or '(No plan generated; answer directly with best practices.)'}"},
         {"role": "developer", "content": "End with one short, encouraging line."},
         {"role": "developer", "content": "Never mention that you created a plan."},
-        {"role": "developer", "content": "If the user asks for exploits/cheats, refuse and offer fair play tips."},
-        {"role": "developer", "content": "Avoid patch-volatile specifics unless clearly standard and timeless."},
     ]
     for q, a in history:
         messages.append({"role": "user", "content": q})
@@ -186,17 +228,32 @@ async def final_answer(user_id: int, question: str, plan: str) -> str:
         oa.responses.create,
         model="gpt-5",
         input=messages,
+        # temperature removed
         max_output_tokens=900,
     )
-    return getattr(resp, "output_text", "Sorry, I couldn’t generate an answer just now.").strip()
+    return extract_output_text(resp)
 
 async def ask_newbbot(user_id: int, question: str) -> str:
-    """Two-pass: plan -> final for higher-quality, consistent coaching."""
+    """Two-pass: plan -> final for higher-quality, consistent coaching; never return empty."""
     try:
-        plan = await plan_answer(user_id, question)
-    except Exception:
-        plan = ""  # fall back if planner fails
-    answer = await final_answer(user_id, question, plan)
+        plan = await oa_plan(user_id, question)
+    except Exception as e:
+        print("Planner error:", repr(e))
+        plan = ""
+    try:
+        answer = await oa_final(user_id, question, plan)
+    except Exception as e:
+        print("Final error:", repr(e))
+        answer = ""
+
+    # Hard fallback to avoid Discord empty-message error
+    if not answer.strip():
+        answer = (
+            "I couldn’t generate a response just now. Quick tip while we sort this out:\n"
+            "- **Parry late, riposte immediately.** Practice on a duel server vs bots for 10 minutes.\n"
+            "Try again in a moment!"
+        )
+
     RECENT_QA[user_id].append((question, answer))
     return answer
 
@@ -207,19 +264,13 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # ignore bots
     if message.author.bot:
         return
-
-    # only handle messages in the help channel or threads under it
     if not is_help_context(message.channel):
         return
-
-    # only reply when bot is mentioned
     if not bot.user or not bot.user.mentioned_in(message):
         return
 
-    # build the user's question by removing the mention(s)
     q = strip_bot_mention(message.content, bot.user)
     if not q:
         return await message.reply(
@@ -229,7 +280,9 @@ async def on_message(message: discord.Message):
     async with message.channel.typing():
         try:
             answer = await ask_newbbot(message.author.id, q)
-            await message.reply(answer, mention_author=False)
+            # Avoid empty strings at send time no matter what
+            safe_answer = answer if answer.strip() else "Sorry, I couldn't form a reply. Please ask again."
+            await message.reply(safe_answer, mention_author=False)
         except Exception as e:
             await message.reply("I couldn’t reach the model just now. Please try again.")
             print("OpenAI error:", repr(e))
