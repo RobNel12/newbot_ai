@@ -1,392 +1,138 @@
 import os
 import re
-import json
-import time
-import asyncio
 import logging
-from collections import deque, defaultdict
-from typing import List
+import asyncio
+from collections import defaultdict, deque
+from typing import Dict, Deque
 
 import discord
+from discord import Message
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# =========================
-# Config & Setup
-# =========================
+# ---------------------- Setup ----------------------
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-HELP_CHANNEL_ID = int(os.getenv("HELP_CHANNEL_ID") or "0")  # required
+HELP_CHANNEL_ID = int(os.getenv("HELP_CHANNEL_ID", "0"))
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-# Model knobs
-RESPONSES_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
-CHAT_FALLBACK_MODEL = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4o-mini")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-if not DISCORD_TOKEN:
-    raise RuntimeError("Missing DISCORD_TOKEN in environment")
-if not OPENAI_API_KEY:
-    raise RuntimeError("Missing OPENAI_API_KEY in environment")
-if not HELP_CHANNEL_ID:
-    raise RuntimeError("Set HELP_CHANNEL_ID (the channel where the bot listens)")
-
-BOT_DISPLAY_NAME = "NewbBot AI"
-MAX_DISCORD_LEN = 2000
-USER_COOLDOWN_SEC = 5  # per-user quiet period
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-
-# OpenAI client (v1.x SDK)
-oa = OpenAI(api_key=OPENAI_API_KEY)
-
-# =========================
-# Stable Knowledge & Memory
-# =========================
-SEED_TIPS = [
-    "Parry → riposte is your bread-and-butter. Parry late, not early.",
-    "Footwork > mouse aim: backstep to make swings whiff; strafe to change hitboxes.",
-    "Manage stamina: feints and missed swings drain fast; force opponents to whiff.",
-    "Maintain spacing: step out after your hit to avoid trades.",
-    "In 1vX: keep enemies in one arc; rotate around the ‘outside’ opponent."
-]
-
-CANON_FAQ = {
-    "parry": [
-        "Center your crosshair on the incoming weapon and parry late as it enters release.",
-        "Immediately queue your riposte; don't wind up first—use riposte timing."
-    ],
-    "feint": [
-        "Only feint if you’re close and their stamina is low; otherwise you feed parries.",
-        "Mix in morphs/accels; untelegraphed timing beats spammy feints."
-    ],
-    "1vx": [
-        "Keep a single target in focus and reposition so others stack behind.",
-        "Use quick, safe weapons or wide arcs to tag multiple when they stack badly."
-    ],
-    "loadout": [
-        "Wear a helmet early; trade a weapon tier for survivability if needed.",
-        "Carry a bandage for sustain; pick perks after core armor is set."
-    ],
-    "aim": [
-        "Practice drags/accels sparingly; fundamentals (distance, stamina) win first.",
-        "Use private duels vs bots to groove parry cadence before pubs."
-    ],
-}
-
-RECENT_QA = defaultdict(lambda: deque(maxlen=6))
-LAST_USER_REPLY_AT = {}  # user_id -> timestamp
-
-# =========================
-# Discord Client
-# =========================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-def is_help_context(ch: discord.abc.GuildChannel) -> bool:
-    """True if message is in the help channel or a thread under it (incl. forum posts)."""
-    if isinstance(ch, discord.TextChannel) and ch.id == HELP_CHANNEL_ID:
+oa = OpenAI(api_key=OPENAI_API_KEY)
+
+# Store short per-user conversation history
+RECENT_QA: Dict[int, Deque] = defaultdict(lambda: deque(maxlen=4))
+MAX_DISCORD_LEN = 2000
+
+# ---------------------- Helpers ----------------------
+def is_help_context(channel: discord.abc.GuildChannel) -> bool:
+    """Return True if channel is the help channel or a thread under it."""
+    if channel.id == HELP_CHANNEL_ID:
         return True
-    if isinstance(ch, discord.Thread) and (ch.parent_id == HELP_CHANNEL_ID):
+    if isinstance(channel, discord.Thread) and getattr(channel, "parent_id", None) == HELP_CHANNEL_ID:
         return True
     return False
 
+def strip_bot_mention(text: str, bot_user: discord.User) -> str:
+    """Remove mention of bot from start of message."""
+    pattern = rf"^<@!?(?:{bot_user.id})>\s*"
+    return re.sub(pattern, "", text).strip()
+
 def sanitize_for_discord(text: str) -> str:
-    if text is None:
+    """Remove zero-width chars and trim whitespace."""
+    if not text:
         return ""
     cleaned = (
-        text.replace("\u200b", "")   # zero-width space
-            .replace("\u200e", "")   # LRM
-            .replace("\u200f", "")   # RLM
-            .replace("\ufeff", "")   # BOM
-    ).strip()
+        text.replace("\u200b", "")
+            .replace("\u200e", "")
+            .replace("\u200f", "")
+            .replace("\ufeff", "")
+            .strip()
+    )
     return cleaned
 
-async def send_safe(msg: discord.Message, content: str):
+async def send_safe(msg: Message, content: str):
+    """Send content safely, chunking and ensuring it's non-empty."""
     safe = sanitize_for_discord(content)
     if not safe:
         safe = (
-            "I couldn’t generate a response just now.\n"
-            "**Quick tip:** Parry late, riposte immediately. Practice 10 mins vs bots.\n"
-            "Please ask again!"
-        )
-    logging.info(f"[SEND] len={len(safe)} preview={repr(safe[:120])}")
-    while safe:
-        chunk = safe[:MAX_DISCORD_LEN - 10]
-        await msg.reply(chunk, mention_author=False)
-        safe = safe[len(chunk):]
-
-def strip_bot_mention(content: str, me: discord.ClientUser) -> str:
-    if not me:
-        return content.strip()
-    pattern = rf"<@!?{me.id}>"
-    cleaned = re.sub(pattern, "", content).strip()
-    return cleaned
-
-# =========================
-# Prompting
-# =========================
-SYSTEM_CORE = (
-    f"You are '{BOT_DISPLAY_NAME}', an expert Mordhau mentor for new players. "
-    "Teach fundamentals first; emphasize safety, spacing, stamina, and timing. "
-    "Be concise but rich with value. Use lists and short steps. Avoid patch-volatile claims—"
-    "if unsure, state how to verify in-game."
-)
-
-STYLE_RULES = (
-    "Format answers with:\n"
-    "1) TL;DR (1–2 lines)\n"
-    "2) Why it matters (1–2 bullets)\n"
-    "3) Do this (numbered steps)\n"
-    "4) Practice drill (1 short drill)\n"
-    "5) Common mistakes (3 bullets)\n"
-    "6) Next skill to learn"
-)
-
-ANTI_HALLUCINATION = (
-    "If a question requires exact numbers or current patch specifics and you’re not certain, "
-    "say you’re unsure and give an in-game way to check. "
-    "Never invent exploits/cheats. Refuse harassment/cheating requests."
-)
-
-def faq_snippets(question: str) -> List[str]:
-    q = (question or "").lower()
-    keys = [k for k in CANON_FAQ if k in q]
-    if any(w in q for w in ("parry", "riposte", "chamber")) and "parry" not in keys:
-        keys.append("parry")
-    if any(w in q for w in ("1v", "1vx", "outnumber", "gank")) and "1vx" not in keys:
-        keys.append("1vx")
-    if any(w in q for w in ("feint", "morph")) and "feint" not in keys:
-        keys.append("feint")
-    if any(w in q for w in ("loadout", "armor", "perk")) and "loadout" not in keys:
-        keys.append("loadout")
-    if any(w in q for w in ("aim", "drag", "accel", "mouse")) and "aim" not in keys:
-        keys.append("aim")
-
-    lines = []
-    for k in keys:
-        lines.extend(CANON_FAQ[k])
-    return lines
-
-# =========================
-# OpenAI Helpers
-# =========================
-def extract_output_text(resp) -> str:
-    """
-    Robustly extract text from Responses API result.
-    Returns a string (possibly empty), never None.
-    """
-    txt = getattr(resp, "output_text", None)
-    if isinstance(txt, str) and txt.strip():
-        return txt.strip()
-
-    # Sweep for any text-like fields
-    try:
-        parts = []
-        out = getattr(resp, "output", None) or []
-        for block in out:
-            content = getattr(block, "content", None) or []
-            for item in content:
-                # common fields in SDK objects
-                for field in ("text", "content", "output_text"):
-                    val = getattr(item, field, "") or ""
-                    if isinstance(val, str) and val.strip():
-                        parts.append(val.strip())
-        combined = "\n".join(parts).strip()
-        if combined:
-            return combined
-    except Exception:
-        pass
-
-    # Last resort: try dict structure
-    try:
-        d = resp.to_dict()
-        parts = []
-        # Scan shallowly for any "text" fields
-        def walk(node):
-            if isinstance(node, dict):
-                for k, v in node.items():
-                    if k in ("text", "output_text", "content") and isinstance(v, str) and v.strip():
-                        parts.append(v.strip())
-                    else:
-                        walk(v)
-            elif isinstance(node, list):
-                for v in node:
-                    walk(v)
-        walk(d)
-        if parts:
-            return "\n".join(parts).strip()
-    except Exception:
-        pass
-
-    return ""
-
-async def call_responses(messages, max_output_tokens: int, *, retries: int = 1) -> str:
-    """
-    Call the Responses API; retry once on empty result.
-    """
-    for attempt in range(retries + 1):
-        resp = await asyncio.to_thread(
-            oa.responses.create,
-            model=RESPONSES_MODEL,
-            input=messages,
-            max_output_tokens=max_output_tokens,
-        )
-        text = extract_output_text(resp)
-        if text.strip():
-            return text.strip()
-        logging.warning(f"Responses empty (attempt {attempt+1}); raw (truncated): "
-                        f"{json.dumps(getattr(resp, 'to_dict', lambda: {})(), indent=2)[:800]}")
-        await asyncio.sleep(0.4)  # tiny backoff
-    return ""
-
-async def call_chat_fallback(messages) -> str:
-    """
-    Fallback to Chat Completions if Responses yields empty.
-    Converts Responses-style 'input' to chat 'messages'.
-    """
-    chat_msgs = []
-    for m in messages:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        # The chat endpoint expects 'system'/'user'/'assistant' roles; keep 'developer' as 'system' adjunct
-        if role == "developer":
-            chat_msgs.append({"role": "system", "content": content})
-        else:
-            chat_msgs.append({"role": role, "content": content})
-
-    resp = await asyncio.to_thread(
-        oa.chat.completions.create,
-        model=CHAT_FALLBACK_MODEL,
-        messages=chat_msgs,
-        # do NOT pass temperature to avoid incompatible-model issues unless you want to tweak
-        max_tokens=900,
-    )
-    try:
-        txt = resp.choices[0].message.content or ""
-        return txt.strip()
-    except Exception:
-        return ""
-
-async def oa_answer(messages, max_output_tokens: int) -> str:
-    """
-    Try Responses → (retry) → Chat fallback.
-    """
-    text = await call_responses(messages, max_output_tokens=max_output_tokens, retries=1)
-    if text.strip():
-        return text
-    logging.warning("Falling back to Chat Completions…")
-    text = await call_chat_fallback(messages)
-    return text or ""
-
-async def plan_answer(user_id: int, question: str) -> str:
-    history = list(RECENT_QA[user_id])
-    messages = [
-        {"role": "system", "content": SYSTEM_CORE},
-        {"role": "developer", "content": "You will first produce a brief plan (outline only), then the final answer in a later call."},
-        {"role": "developer", "content": "Starter tips:\n- " + "\n- ".join(SEED_TIPS)},
-        {"role": "developer", "content": "If the question is vague, pick the most likely beginner intent and proceed."},
-    ]
-    for q, a in history:
-        messages.append({"role": "user", "content": q})
-        messages.append({"role": "assistant", "content": a})
-
-    hints = faq_snippets(question)
-    if hints:
-        messages.append({"role": "developer", "content": "Relevant stable coaching notes:\n- " + "\n- ".join(hints)})
-
-    messages.append({"role": "user", "content": f"Outline a coaching plan (5–8 bullet points) to answer: {question}"})
-
-    try:
-        return await oa_answer(messages, max_output_tokens=500)
-    except Exception as e:
-        logging.warning(f"Planner error: {e!r}")
-        return ""
-
-async def final_answer(user_id: int, question: str, plan: str) -> str:
-    history = list(RECENT_QA[user_id])
-    messages = [
-        {"role": "system", "content": SYSTEM_CORE},
-        {"role": "developer", "content": STYLE_RULES},
-        {"role": "developer", "content": ANTI_HALLUCINATION},
-        {"role": "developer", "content": "Use crisp formatting (bullets/numbered lists). Keep it beginner-friendly."},
-        {"role": "developer", "content": f"Here is your plan. Follow it closely:\n{plan or '(No plan generated; answer directly with best practices.)'}"},
-        {"role": "developer", "content": "End with one short, encouraging line."},
-        {"role": "developer", "content": "Never mention that you created a plan."},
-    ]
-    for q, a in history:
-        messages.append({"role": "user", "content": q})
-        messages.append({"role": "assistant", "content": a})
-
-    hints = faq_snippets(question)
-    if hints:
-        messages.append({"role": "developer", "content": "Stable coaching notes:\n- " + "\n- ".join(hints)})
-
-    messages.append({"role": "user", "content": question})
-
-    try:
-        return await oa_answer(messages, max_output_tokens=900)
-    except Exception as e:
-        logging.error(f"Final pass error: {e!r}")
-        return ""
-
-async def ask_newbbot(user_id: int, question: str) -> str:
-    plan = await plan_answer(user_id, question)
-    answer = await final_answer(user_id, question, plan)
-    if not sanitize_for_discord(answer):
-        answer = (
             "I couldn’t generate a full response just now. Quick fundamentals while we sort this out:\n"
             "- **Parry late, riposte immediately.**\n"
             "- Keep your distance; make them whiff, then step in.\n"
             "- Watch stamina—wins often come from out-stamming.\n"
             "Ask again in a moment!"
         )
-    RECENT_QA[user_id].append((question, answer))
-    return answer
 
-# =========================
-# Events
-# =========================
+    logging.info(f"[SEND] len={len(safe)} preview={repr(safe[:120])}")
+
+    while safe:
+        chunk = safe[:MAX_DISCORD_LEN - 10]
+        await msg.reply(chunk, mention_author=False)
+        safe = safe[len(chunk):]
+
+async def ask_openai(user_id: int, question: str) -> str:
+    """Ask OpenAI with a Mordhau mentor system prompt + short history."""
+    history = RECENT_QA[user_id]
+    messages = [
+        {"role": "system", "content": (
+            "You are NewbBot AI, a friendly expert Mordhau mentor for brand-new players. "
+            "Give high-quality, structured coaching answers in this format:\n"
+            "TL;DR (1 line)\nWhy it matters (1–2 bullets)\nDo this (steps)\nPractice drill\nCommon mistakes (3 bullets)\nNext skill to learn (1 line)\n"
+            "Avoid toxicity, cheats, or patch-volatile specifics. Emphasize fundamentals."
+        )}
+    ]
+    for q, a in history:
+        messages.append({"role": "user", "content": q})
+        messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": question})
+
+    try:
+        resp = await asyncio.to_thread(
+            oa.chat.completions.create,
+            model=OPENAI_MODEL,
+            messages=messages,
+            max_tokens=900
+        )
+        answer = resp.choices[0].message.content.strip()
+        if answer:
+            history.append((question, answer))
+        return answer
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
+        return ""
+
+# ---------------------- Events ----------------------
 @bot.event
 async def on_ready():
-    logging.info(f"{BOT_DISPLAY_NAME} online as {bot.user} (ID: {bot.user.id})")
+    logging.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 @bot.event
-async def on_message(message: discord.Message):
+async def on_message(message: Message):
     if message.author.bot:
         return
     if not is_help_context(message.channel):
         return
-    if not bot.user or not bot.user.mentioned_in(message):
+    if not bot.user or not message.content:
+        return
+    if not bot.user.mentioned_in(message):
         return
 
-    # per-user cooldown
-    now = time.time()
-    last = LAST_USER_REPLY_AT.get(message.author.id, 0)
-    if now - last < USER_COOLDOWN_SEC:
-        return
-    LAST_USER_REPLY_AT[message.author.id] = now
-
-    q = strip_bot_mention(message.content, bot.user)
-    if not sanitize_for_discord(q):
-        return await send_safe(
-            message,
-            f"Hi! Mention me with your Mordhau question here in <#{HELP_CHANNEL_ID}> or a thread under it."
-        )
+    question = strip_bot_mention(message.content, bot.user)
+    if not sanitize_for_discord(question):
+        return await send_safe(message, f"Hi! Mention me with your Mordhau question here in <#{HELP_CHANNEL_ID}>.")
 
     async with message.channel.typing():
-        try:
-            answer = await ask_newbbot(message.author.id, q)
-            await send_safe(message, answer)
-        except Exception as e:
-            logging.error(f"Handler error: {e!r}")
-            await send_safe(message, "I couldn’t reach the model just now. Please try again.")
+        answer = await ask_openai(message.author.id, question)
+        await send_safe(message, answer)
 
-# =========================
-# Run
-# =========================
+# ---------------------- Main ----------------------
 if __name__ == "__main__":
+    if not DISCORD_TOKEN or not OPENAI_API_KEY or not HELP_CHANNEL_ID:
+        logging.error("Missing required .env variables.")
+        exit(1)
     bot.run(DISCORD_TOKEN)
