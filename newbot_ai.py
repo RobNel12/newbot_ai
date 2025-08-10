@@ -59,6 +59,8 @@ def sanitize_for_discord(text: str) -> str:
 async def send_safe(msg: Message, content: str):
     """Send content safely, chunking and ensuring it's non-empty."""
     safe = sanitize_for_discord(content)
+
+    # Only replace with fallback if the *original* content was empty
     if not safe:
         safe = (
             "I couldn’t generate a full response just now. Quick fundamentals while we sort this out:\n"
@@ -70,10 +72,9 @@ async def send_safe(msg: Message, content: str):
 
     logging.info(f"[SEND] len={len(safe)} preview={repr(safe[:120])}")
 
-    while safe:
-        chunk = safe[:MAX_DISCORD_LEN - 10]
-        await msg.reply(chunk, mention_author=False)
-        safe = safe[len(chunk):]
+    # Send in chunks (if needed)
+    for i in range(0, len(safe), MAX_DISCORD_LEN - 10):
+        await msg.reply(safe[i:i + (MAX_DISCORD_LEN - 10)], mention_author=False)
 
 async def ask_openai(user_id: int, question: str) -> str:
     """Ask OpenAI with a Mordhau mentor system prompt + short history."""
