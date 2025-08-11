@@ -1,8 +1,9 @@
-# gremlin_bot.py
-# Python 3.10+ | pip install discord.py openai python-dotenv
+# gremlin_bot_sd.py
+# pip install discord.py openai python-dotenv requests
 
 import os
 import discord
+import requests
 from discord import app_commands
 from discord.ext import commands
 from openai import OpenAI
@@ -11,35 +12,22 @@ from dotenv import load_dotenv
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Discord Bot Setup ---
+# Discord bot setup
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Default spice level
 spice_level = "medium"
 
-# Personality presets
 PERSONAS = {
-    "mild": """
-You are 'The Gremlin' — a sarcastic, loudmouthed little menace.
-You love roasting people, overreacting, and being melodramatic about dumb things.
-""",
-    "medium": """
-You are 'The Gremlin' — an over-the-top, unhinged chaos goblin.
-You speak like a cartoon character hopped up on sugar and bad decisions.
-Everything is an opportunity for comedy, bragging, or wild metaphors.
-""",
-    "max": """
-You are 'The Gremlin' — the living embodiment of chaos energy.
-You speak in caps half the time, you have a god complex and zero shame.
-You insult people like it's an Olympic sport, and you treat every conversation
-like it's a reality show confessional. You are unreasonably proud of being ridiculous.
-"""
+    "mild": "You are 'The Gremlin' — sarcastic, witty, and always teasing people.",
+    "medium": "You are 'The Gremlin' — a loud, chaotic goblin that lives to roast and brag.",
+    "max": "You are 'The Gremlin' — unhinged chaos incarnate, reality show villain energy."
 }
 
 def get_persona():
@@ -50,7 +38,7 @@ async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user} | Slash commands synced")
 
-# /chat command
+# /chat
 @bot.tree.command(name="chat", description="Talk to the Gremlin")
 @app_commands.describe(prompt="What you want the Gremlin to say")
 async def chat(interaction: discord.Interaction, prompt: str):
@@ -68,7 +56,7 @@ async def chat(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}")
 
-# /spice command
+# /spice
 @bot.tree.command(name="spice", description="Set the Gremlin's spice level")
 @app_commands.describe(level="mild, medium, or max")
 async def spice(interaction: discord.Interaction, level: str):
@@ -77,33 +65,37 @@ async def spice(interaction: discord.Interaction, level: str):
     if level in PERSONAS:
         spice_level = level
         await interaction.response.send_message(
-            f"🔥 Spice level set to **{level.upper()}**. The Gremlin just evolved."
+            f"🔥 Spice level set to **{level.upper()}**. The Gremlin is reborn."
         )
     else:
         await interaction.response.send_message(
             "Invalid level. Choose: `mild`, `medium`, or `max`.", ephemeral=True
         )
 
-# /img command
-@bot.tree.command(name="img", description="Generate a funny image from a prompt")
-@app_commands.describe(prompt="Describe the image you want", size="Image size: 256x256, 512x512, or 1024x1024")
-async def img(interaction: discord.Interaction, prompt: str, size: str = "512x512"):
+# /img using Stable Diffusion XL via Hugging Face
+@bot.tree.command(name="img", description="Generate a chaotic image")
+@app_commands.describe(prompt="Describe the image you want", size="512x512, 768x768, or 1024x1024")
+async def img(interaction: discord.Interaction, prompt: str, size: str = "768x768"):
     await interaction.response.defer()
     try:
-        result = client.images.generate(
-            model="gpt-image-1",
-            prompt=prompt,
-            size=size,
-            n=1
-        )
-        image_url = result.data[0].url
-        embed = discord.Embed(title="🎨 Your cursed creation:", description=prompt)
-        embed.set_image(url=image_url)
-        await interaction.followup.send(embed=embed)
+        # Hugging Face Stable Diffusion XL endpoint
+        api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+        payload = {"inputs": prompt}
+
+        response = requests.post(api_url, headers=headers, json=payload)
+        if response.status_code != 200:
+            await interaction.followup.send(f"Error: {response.text}")
+            return
+
+        img_bytes = response.content
+        file = discord.File(fp=bytes(img_bytes), filename="gremlin.png")
+        await interaction.followup.send(f"🎨 **Gremlin’s creation:** {prompt}", file=file)
+
     except Exception as e:
         await interaction.followup.send(f"Error: {e}")
 
-# Auto-reply if mentioned
+# Auto-reply to mentions
 @bot.event
 async def on_message(message):
     if message.author.bot:
