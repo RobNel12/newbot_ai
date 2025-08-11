@@ -1,14 +1,16 @@
-# gremlin_bot_sd.py
+# gremlin_bot.py
 # pip install discord.py openai python-dotenv requests
 
 import os
 import discord
 import requests
+from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# Load secrets
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -16,18 +18,29 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Discord bot setup
+# --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Default spice level
 spice_level = "medium"
 
+# Personalities
 PERSONAS = {
-    "mild": "You are 'The Gremlin' — sarcastic, witty, and always teasing people.",
-    "medium": "You are 'The Gremlin' — a loud, chaotic goblin that lives to roast and brag.",
-    "max": "You are 'The Gremlin' — unhinged chaos incarnate, reality show villain energy."
+    "mild": """
+You are 'The Gremlin' — sarcastic, witty, and teasing. You roast people like a stand-up comic
+who just had three cups of coffee. You’re chaotic, but in a PG-13 way.
+""",
+    "medium": """
+You are 'The Gremlin' — a loud, unhinged chaos goblin. You speak like a cartoon character
+who just won the lottery and decided to buy a flamethrower. You roast people for fun.
+""",
+    "max": """
+You are 'The Gremlin' — pure chaos energy incarnate. You speak in caps half the time, act like a
+reality show villain, and make wild metaphors. You are proud of being ridiculous and unstoppable.
+"""
 }
 
 def get_persona():
@@ -65,32 +78,44 @@ async def spice(interaction: discord.Interaction, level: str):
     if level in PERSONAS:
         spice_level = level
         await interaction.response.send_message(
-            f"🔥 Spice level set to **{level.upper()}**. The Gremlin is reborn."
+            f"🔥 Spice level set to **{level.upper()}**. The Gremlin has evolved."
         )
     else:
         await interaction.response.send_message(
             "Invalid level. Choose: `mild`, `medium`, or `max`.", ephemeral=True
         )
 
-# /img using Stable Diffusion XL via Hugging Face
-@bot.tree.command(name="img", description="Generate a chaotic image")
+# /img — chaotic personality injection
+@bot.tree.command(name="img", description="Generate a chaotic Gremlin-style image")
 @app_commands.describe(prompt="Describe the image you want", size="512x512, 768x768, or 1024x1024")
 async def img(interaction: discord.Interaction, prompt: str, size: str = "768x768"):
     await interaction.response.defer()
     try:
+        # Add Gremlin chaos to prompt
+        chaotic_prompt = (
+            f"{prompt} — but make it look like it’s straight out of a fever dream, "
+            "with absurd details, wild colors, and a vibe like the laws of physics are optional."
+        )
+
         # Hugging Face Stable Diffusion XL endpoint
         api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-        payload = {"inputs": prompt}
+        payload = {"inputs": chaotic_prompt}
 
         response = requests.post(api_url, headers=headers, json=payload)
         if response.status_code != 200:
             await interaction.followup.send(f"Error: {response.text}")
             return
 
-        img_bytes = response.content
-        file = discord.File(fp=bytes(img_bytes), filename="gremlin.png")
-        await interaction.followup.send(f"🎨 **Gremlin’s creation:** {prompt}", file=file)
+        # Convert to file for Discord
+        img_bytes = BytesIO(response.content)
+        img_bytes.seek(0)
+        file = discord.File(img_bytes, filename="gremlin.png")
+
+        await interaction.followup.send(
+            f"🎨 **Gremlin's cursed masterpiece:** {chaotic_prompt}",
+            file=file
+        )
 
     except Exception as e:
         await interaction.followup.send(f"Error: {e}")
