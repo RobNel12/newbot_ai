@@ -107,7 +107,7 @@ async def img(interaction: discord.Interaction, prompt: str, size: str = "768x76
         file = discord.File(img_bytes, filename="gremlin.png")
 
         await interaction.followup.send(
-            f"🎨 **{promo}**",
+            f"🎨 **{prompt}**",
             file=file
         )
 
