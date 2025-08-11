@@ -44,13 +44,13 @@ async def chat(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}")
 
-# ====== /img command (Qwen-Image via Hugging Face API) ======
-@bot.tree.command(name="img", description="Generate an image with Qwen-Image via Hugging Face API")
+# ====== /img command (Stable Diffusion XL via Hugging Face API) ======
+@bot.tree.command(name="img", description="Generate an image using Stable Diffusion XL via Hugging Face API")
 @app_commands.describe(prompt="Describe the image you want")
 async def img(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
-        api_url = "https://api-inference.huggingface.co/models/Qwen/Qwen-Image"
+        api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {HF_API_KEY}"}
         payload = {"inputs": prompt}
 
@@ -63,8 +63,8 @@ async def img(interaction: discord.Interaction, prompt: str):
         img_bytes = BytesIO(response.content)
         img_bytes.seek(0)
 
-        file = discord.File(img_bytes, filename="qwen_image.png")
-        await interaction.followup.send(f"🎨 **Qwen-Image Result:** {prompt}", file=file)
+        file = discord.File(img_bytes, filename="sdxl_image.png")
+        await interaction.followup.send(f"🎨 **Stable Diffusion XL Result:** {prompt}", file=file)
 
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}")
