@@ -86,7 +86,7 @@ async def spice(interaction: discord.Interaction, level: str):
         )
 
 # /img — chaotic personality injection
-@bot.tree.command(name="img", description="Generate a chaotic Gremlin-style image")
+@bot.tree.command(name="img", description="Generate an image")
 @app_commands.describe(prompt="Describe the image you want", size="512x512, 768x768, or 1024x1024")
 async def img(interaction: discord.Interaction, prompt: str, size: str = "768x768"):
     await interaction.response.defer()
