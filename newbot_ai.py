@@ -94,7 +94,7 @@ async def img(interaction: discord.Interaction, prompt: str, size: str = "768x76
         # Hugging Face Stable Diffusion XL endpoint
         api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-        payload = {"inputs": chaotic_prompt}
+        payload = {"inputs": prompt}
 
         response = requests.post(api_url, headers=headers, json=payload)
         if response.status_code != 200:
