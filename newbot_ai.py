@@ -91,12 +91,6 @@ async def spice(interaction: discord.Interaction, level: str):
 async def img(interaction: discord.Interaction, prompt: str, size: str = "768x768"):
     await interaction.response.defer()
     try:
-        # Add Gremlin chaos to prompt
-        chaotic_prompt = (
-            f"{prompt} — but make it look like it’s straight out of a fever dream, "
-            "with absurd details, wild colors, and a vibe like the laws of physics are optional."
-        )
-
         # Hugging Face Stable Diffusion XL endpoint
         api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {HF_API_KEY}"}
