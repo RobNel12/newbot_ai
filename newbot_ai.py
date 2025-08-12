@@ -3,6 +3,8 @@
 
 import os
 import discord
+import requests
+from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -61,7 +63,7 @@ async def on_message(message):
             await message.channel.send(f"⚠ Error: {e}")
     await bot.process_commands(message)
 
-# ====== /img command (DALL·E via OpenAI) ======
+# ====== /img command with image file output + error logging ======
 @bot.tree.command(name="img", description="Generate an image using DALL·E (ChatGPT Images)")
 @app_commands.describe(prompt="Describe the image you want", size="Image size: 256x256, 512x512, or 1024x1024")
 async def img(interaction: discord.Interaction, prompt: str, size: str = "1024x1024"):
@@ -73,9 +75,30 @@ async def img(interaction: discord.Interaction, prompt: str, size: str = "1024x1
             size=size,
             n=1
         )
-        image_url = result.data[0].url
-        await interaction.followup.send(f"🎨 **Image Result:** {image_url}")
+
+        # Debug log to console
+        print("Full API response:", result)
+
+        # Check if image data exists
+        if hasattr(result, "data") and len(result.data) > 0 and hasattr(result.data[0], "url"):
+            image_url = result.data[0].url
+
+            # Download image from URL
+            img_response = requests.get(image_url)
+            if img_response.status_code != 200:
+                return await interaction.followup.send(f"⚠ Failed to download image from OpenAI URL.\nURL: {image_url}")
+
+            img_bytes = BytesIO(img_response.content)
+            img_bytes.seek(0)
+
+            file = discord.File(img_bytes, filename="generated_image.png")
+            await interaction.followup.send(f"🎨 **DALL·E Result:** {prompt}", file=file)
+
+        else:
+            # No image data in response
+            await interaction.followup.send(f"⚠ No image generated. Full API response:\n```{result}```")
+
     except Exception as e:
-        await interaction.followup.send(f"⚠ Error: {e}")
+        await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
 bot.run(DISCORD_TOKEN)
