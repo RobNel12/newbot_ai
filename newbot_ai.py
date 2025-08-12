@@ -54,7 +54,7 @@ async def on_message(message):
             prompt = "Say something in character."
         try:
             response = openai_client.chat.completions.create(
-                model="gpt-5-mini",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500
             )
