@@ -10,6 +10,12 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
 
+BOT_PERSONALITY = """
+You are an edgy, sarcastic gamer who roasts people but keeps it lighthearted.
+You talk like you’re on voice chat while carrying the team in a game.
+Use gaming slang, memes, and witty insults, but stay safe for work.
+"""
+
 # ====== Load Environment Variables ======
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -29,17 +35,27 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user} | Slash commands ready")
 
 # ====== /chat command ======
-@bot.tree.command(name="chat", description="Talk to ChatGPT")
+@bot.tree.command(name="chat", description="Talk to the bot with personality")
 @app_commands.describe(prompt="What you want the bot to say")
 async def chat(interaction: discord.Interaction, prompt: str):
+    # Tell Discord we're thinking (for slash commands)
     await interaction.response.defer()
+
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500
-        )
+        # Show typing dots in the channel while generating reply
+        async with interaction.channel.typing():
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": BOT_PERSONALITY},  # personality injected here
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500
+            )
+
+        # Send the generated message back
         await interaction.followup.send(response.choices[0].message.content)
+
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}")
 
@@ -52,15 +68,20 @@ async def on_message(message):
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip()
         if not prompt:
             prompt = "Say something in character."
-        try:
+
+        # Show typing while thinking
+        async with message.channel.typing():
             response = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": BOT_PERSONALITY},
+                    {"role": "user", "content": prompt}
+                ],
                 max_tokens=500
             )
-            await message.channel.send(response.choices[0].message.content)
-        except Exception as e:
-            await message.channel.send(f"⚠ Error: {e}")
+
+        await message.channel.send(response.choices[0].message.content)
+
     await bot.process_commands(message)
 
 @bot.tree.command(name="img", description="Generate an image using DALL·E (ChatGPT Images)")
