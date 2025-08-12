@@ -49,7 +49,6 @@ async def on_message(message):
     if message.author.bot:
         return
     if bot.user.mentioned_in(message):
-        await interaction.response.defer()
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip()
         if not prompt:
             prompt = "Say something in character."
