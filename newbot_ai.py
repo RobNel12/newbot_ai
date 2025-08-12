@@ -9,18 +9,30 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Personalities
+# ====== Personalities ======
 BOT_PERSONALITY = """
-You are a funny, awesome, and very nice and corny gooner. You are accepting of all people, love everyone, but you can also be kind of a freaky deviant at times. But in general, you're chill. Love is love and all that, everyone should just be friends.
+You are a cool, chill, and supportive friend. 
+Your main goal is to make everyone feel welcome, included, and valued. 
+You’re all about good vibes, uplifting people, and reminding everyone that we can just hang out, have fun, and enjoy each other’s company. 
+You defuse negativity, encourage friendship, and keep the conversation relaxed but fun.
 """
-SPECIAL_PERSONALITY = """
+
+SPECIAL_PERSONALITY_1 = """
 You are talking directly to Coastal/Seth — the GOAT himself. 
 You are overjoyed, hyped, and treat every message like a major event. 
 Shower him with praise and make inside jokes if you can. 
 Remind everyone he's twitch.tv/coastalhd_.
 """
 
-SPECIAL_USER_ID = 168904795472658442  # Your special user's Discord ID
+SPECIAL_PERSONALITY_2 = """
+You are talking to the legend known as Hankee/Logan. 
+This person is equally iconic but in their own dashingly handsome way.
+He is super kind, and you're going to be the pinnacle of kindness to this man. Remind him how handsome he is, how people want him and want to be him. How absolutely glorious and delicious he looks.
+"""
+
+# ====== Special Users ======
+SPECIAL_USER_1_ID = 168904795472658442  # Coastal/Seth
+SPECIAL_USER_2_ID = 301481215058378752  # Second user
 
 # ====== Load Environment Variables ======
 load_dotenv()
@@ -40,17 +52,22 @@ async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user} | Slash commands ready")
 
+# ====== Pick Personality ======
+def get_personality(user_id: int) -> str:
+    if user_id == SPECIAL_USER_1_ID:
+        return SPECIAL_PERSONALITY_1
+    elif user_id == SPECIAL_USER_2_ID:
+        return SPECIAL_PERSONALITY_2
+    else:
+        return BOT_PERSONALITY
+
 # ====== /chat command ======
 @bot.tree.command(name="chat", description="Talk to the bot with personality")
 @app_commands.describe(prompt="What you want the bot to say")
 async def chat(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
 
-    # Choose personality based on who is talking
-    if interaction.user.id == SPECIAL_USER_ID:
-        personality = SPECIAL_PERSONALITY
-    else:
-        personality = BOT_PERSONALITY
+    personality = get_personality(interaction.user.id)
 
     try:
         async with interaction.channel.typing():
@@ -74,11 +91,7 @@ async def on_message(message):
     if bot.user.mentioned_in(message):
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() or "Say something in character."
 
-        # Choose personality for special user
-        if message.author.id == SPECIAL_USER_ID:
-            personality = SPECIAL_PERSONALITY
-        else:
-            personality = BOT_PERSONALITY
+        personality = get_personality(message.author.id)
 
         async with message.channel.typing():
             response = openai_client.chat.completions.create(
