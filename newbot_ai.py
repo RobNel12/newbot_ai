@@ -69,7 +69,7 @@ async def img(interaction: discord.Interaction, prompt: str, size: str = "1024x1
     await interaction.response.defer()
     try:
         result = openai_client.images.generate(
-            model="gpt-image-1",
+            model="dall-e-3",
             prompt=prompt,
             size=size,
             n=1
