@@ -85,14 +85,13 @@ async def on_message(message):
     await bot.process_commands(message)
 
 @bot.tree.command(name="img", description="Generate an image using DALL·E (ChatGPT Images)")
-@app_commands.describe(prompt="Describe the image you want", size="Image size: 256x256, 512x512, or 1024x1024")
-async def img(interaction: discord.Interaction, prompt: str, size: str = "1024x1024"):
+@app_commands.describe(prompt="Describe the image you want")
+async def img(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
         result = openai_client.images.generate(
             model="dall-e-3",
             prompt=prompt,
-            size=size,
             n=1
         )
 
