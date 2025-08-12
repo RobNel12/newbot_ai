@@ -33,7 +33,7 @@ async def chat(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=250
         )
@@ -52,7 +52,7 @@ async def on_message(message):
             prompt = "Say something in character."
         try:
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=250
             )
