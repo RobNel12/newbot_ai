@@ -37,7 +37,7 @@ async def chat(interaction: discord.Interaction, prompt: str):
         response = openai_client.chat.completions.create(
             model="gpt-5-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=250
+            max_completion_tokens=250
         )
         await interaction.followup.send(response.choices[0].message.content)
     except Exception as e:
@@ -56,7 +56,7 @@ async def on_message(message):
             response = openai_client.chat.completions.create(
                 model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=250
+                max_completion_tokens=250
             )
             await message.channel.send(response.choices[0].message.content)
         except Exception as e:
