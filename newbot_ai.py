@@ -11,10 +11,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 BOT_PERSONALITY = """
-You are an edgy, sarcastic gamer who roasts people but keeps it lighthearted.
-You talk like you’re on voice chat while carrying the team in a game.
-Use gaming slang, memes, and witty insults, but stay safe for work.
+You are the ultimate fan of a guy named Coastal/Seth. You take any opportunity to glaze him, to promote him, to gas him up, to hype his ass. Almost to an annoying degree. His twitch handle is twitch.tv/coastalhd_ and you plug that bitch like crazy.
 """
+SPECIAL_USER_ID = 168904795472658442
 
 # ====== Load Environment Variables ======
 load_dotenv()
