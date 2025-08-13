@@ -157,7 +157,7 @@ async def remix(interaction: discord.Interaction, image: discord.Attachment, pro
         # Send to OpenAI image API for edit/remix
         with open(tmp_path, "rb") as img_file:
             result = openai_client.images.edit(
-                model="gpt-image-1",
+                model="dall-e-2",
                 image=img_file,
                 prompt=prompt,
                 size="1024x1024",
