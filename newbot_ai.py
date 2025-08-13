@@ -3,6 +3,7 @@
 import os
 import discord
 import requests
+import tempfile
 from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
@@ -137,28 +138,38 @@ async def img(interaction: discord.Interaction, prompt: str):
         print(f"[API ERROR] {e}")
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
+
 @bot.tree.command(name="remix", description="Remix or modify an image with AI")
 @app_commands.describe(image="The image to remix", prompt="Describe how you want it changed")
 async def remix(interaction: discord.Interaction, image: discord.Attachment, prompt: str):
     await interaction.response.defer()
 
     try:
-        # Download the uploaded image
-        img_bytes = await image.read()
-        
-        # Send to OpenAI image API for variation with prompt
-        result = openai_client.images.edit(
-            model="gpt-image-1",
-            image=img_bytes,
-            prompt=prompt,
-            size="1024x1024",
-            n=1
-        )
+        # Save uploaded image to a temp file with correct extension
+        ext = os.path.splitext(image.filename)[1].lower()
+        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+            return await interaction.followup.send("⚠ Unsupported file format. Please use JPG, PNG, or WEBP.")
 
-        if hasattr(result, "data") and len(result.data) > 0 and hasattr(result.data[0], "url"):
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(await image.read())
+            tmp_path = tmp.name
+
+        # Send to OpenAI image API for edit/remix
+        with open(tmp_path, "rb") as img_file:
+            result = openai_client.images.edit(
+                model="gpt-image-1",
+                image=img_file,
+                prompt=prompt,
+                size="1024x1024",
+                n=1
+            )
+
+        os.remove(tmp_path)  # cleanup temp file
+
+        if result.data and result.data[0].url:
             remix_url = result.data[0].url
-
             remix_response = requests.get(remix_url)
+
             if remix_response.status_code != 200:
                 return await interaction.followup.send(f"⚠ Failed to download remixed image.\nURL: {remix_url}")
 
