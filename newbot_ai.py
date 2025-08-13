@@ -196,6 +196,46 @@ async def img(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
+# ====== Forget Command ======
+@bot.tree.command(name="forget", description="Clear the bot's conversation memory")
+@app_commands.describe(scope="Choose what to clear: user, server, or all")
+@app_commands.choices(scope=[
+    app_commands.Choice(name="user", value="user"),
+    app_commands.Choice(name="server", value="server"),
+    app_commands.Choice(name="all", value="all"),
+])
+async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    if scope.value == "user":
+        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 Your personal memory has been cleared.", ephemeral=True)
+
+    elif scope.value == "server":
+        if not interaction.user.guild_permissions.administrator:
+            conn.close()
+            return await interaction.response.send_message("⚠ You must be an **administrator** to clear server memory.", ephemeral=True)
+        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 Server memory has been cleared.")
+
+    elif scope.value == "all":
+        if not interaction.user.guild_permissions.administrator:
+            conn.close()
+            return await interaction.response.send_message("⚠ You must be an **administrator** to clear all memory.", ephemeral=True)
+        c.execute("DELETE FROM memory")
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 All memory (user + server) has been cleared.")
+
+    else:
+        conn.close()
+        await interaction.response.send_message("⚠ Invalid scope.", ephemeral=True)
+
 # ====== Bot Ready ======
 @bot.event
 async def on_ready():
