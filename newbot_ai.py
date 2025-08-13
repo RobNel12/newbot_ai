@@ -139,48 +139,6 @@ async def img(interaction: discord.Interaction, prompt: str):
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
 
-HF_API_KEY = os.getenv("HF_API_KEY")
 
-@bot.tree.command(name="remix", description="Remix or modify an image using free Stable Diffusion on Hugging Face")
-@app_commands.describe(image="The image to remix", prompt="Describe how you want it changed")
-async def remix(interaction: discord.Interaction, image: discord.Attachment, prompt: str):
-    await interaction.response.defer()
-
-    try:
-        # Validate file format
-        ext = os.path.splitext(image.filename)[1].lower()
-        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
-            return await interaction.followup.send("⚠ Please upload a JPG, PNG, or WEBP image.")
-
-        # Save image temporarily
-        img_bytes = await image.read()
-
-        # Hugging Face Free Model (image-to-image)
-        HF_MODEL = "runwayml/stable-diffusion-v1-5"
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
-            headers={"Authorization": f"Bearer {HF_API_KEY}"},
-            files={"image": ("image.png", img_bytes, "image/png")},
-            data={"prompt": prompt, "strength": 0.8}
-        )
-
-        # Handle non-image errors
-        if response.status_code != 200 or "image" not in response.headers.get("content-type", ""):
-            error_text = response.text
-            print(f"[HF API ERROR] {error_text}")
-            short_error = (error_text[:1900] + "...") if len(error_text) > 1900 else error_text
-            return await interaction.followup.send(f"⚠ Image generation failed:\n```{short_error}```")
-
-        # Send result back to Discord
-        img_result = BytesIO(response.content)
-        img_result.seek(0)
-        file = discord.File(img_result, filename="remixed.png")
-        await interaction.followup.send(f"🎨 **Free SD Remix:** {prompt}", file=file)
-
-    except Exception as e:
-        err_msg = str(e)
-        print(f"[BOT ERROR] {err_msg}")
-        short_err = (err_msg[:1900] + "...") if len(err_msg) > 1900 else err_msg
-        await interaction.followup.send(f"⚠ Error:\n```{short_err}```")
 
 bot.run(DISCORD_TOKEN)
