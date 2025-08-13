@@ -166,7 +166,7 @@ async def remix(interaction: discord.Interaction, image: discord.Attachment, pro
 
         # Hugging Face API request for SDXL image-to-image
         response = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            f"https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
             headers={
                 "Authorization": f"Bearer {HF_API_KEY}"
             },
@@ -175,21 +175,29 @@ async def remix(interaction: discord.Interaction, image: discord.Attachment, pro
             },
             data={
                 "prompt": prompt,
-                "strength": 0.8  # 0.0 = preserve image exactly, 1.0 = fully change
+                "strength": 0.8
             }
         )
 
+        # If something went wrong, handle error safely
         if response.status_code != 200:
+            error_text = response.text
+            print(f"[HF API ERROR] {error_text}")  # Full output for you
+            short_error = (error_text[:1900] + "...") if len(error_text) > 1900 else error_text
             return await interaction.followup.send(
-                f"⚠ HF API request failed: {response.status_code}\n{response.text}"
+                f"⚠ HF API request failed ({response.status_code}):\n```{short_error}```"
             )
 
+        # Send result image to Discord
         img_result = BytesIO(response.content)
         img_result.seek(0)
         file = discord.File(img_result, filename="remixed.png")
         await interaction.followup.send(f"🎨 **SDXL Remix:** {prompt}", file=file)
 
     except Exception as e:
-        await interaction.followup.send(f"⚠ Error:\n```{str(e)}```")
+        err_msg = str(e)
+        print(f"[BOT ERROR] {err_msg}")  # Full error in console
+        short_err = (err_msg[:1900] + "...") if len(err_msg) > 1900 else err_msg
+        await interaction.followup.send(f"⚠ Error:\n```{short_err}```")
 
 bot.run(DISCORD_TOKEN)
