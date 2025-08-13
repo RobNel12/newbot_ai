@@ -141,62 +141,45 @@ async def img(interaction: discord.Interaction, prompt: str):
 
 HF_API_KEY = os.getenv("HF_API_KEY")
 
-HF_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
-
-@bot.tree.command(name="remix", description="Remix or modify an image using SDXL on Hugging Face")
+@bot.tree.command(name="remix", description="Remix or modify an image using free Stable Diffusion on Hugging Face")
 @app_commands.describe(image="The image to remix", prompt="Describe how you want it changed")
 async def remix(interaction: discord.Interaction, image: discord.Attachment, prompt: str):
     await interaction.response.defer()
 
     try:
-        # Check file extension
+        # Validate file format
         ext = os.path.splitext(image.filename)[1].lower()
         if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
             return await interaction.followup.send("⚠ Please upload a JPG, PNG, or WEBP image.")
 
-        # Save image to temp file
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(await image.read())
-            tmp_path = tmp.name
+        # Save image temporarily
+        img_bytes = await image.read()
 
-        with open(tmp_path, "rb") as img_file:
-            img_bytes = img_file.read()
-
-        os.remove(tmp_path)
-
-        # Hugging Face API request for SDXL image-to-image
+        # Hugging Face Free Model (image-to-image)
+        HF_MODEL = "runwayml/stable-diffusion-v1-5"
         response = requests.post(
-            f"https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-            headers={
-                "Authorization": f"Bearer {HF_API_KEY}"
-            },
-            files={
-                "init_image": ("image.png", img_bytes, "image/png")
-            },
-            data={
-                "prompt": prompt,
-                "strength": 0.8
-            }
+            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            headers={"Authorization": f"Bearer {HF_API_KEY}"},
+            files={"image": ("image.png", img_bytes, "image/png")},
+            data={"prompt": prompt, "strength": 0.8}
         )
 
-        # If something went wrong, handle error safely
-        if response.status_code != 200:
+        # Handle non-image errors
+        if response.status_code != 200 or "image" not in response.headers.get("content-type", ""):
             error_text = response.text
-            print(f"[HF API ERROR] {error_text}")  # Full output for you
+            print(f"[HF API ERROR] {error_text}")
             short_error = (error_text[:1900] + "...") if len(error_text) > 1900 else error_text
-            return await interaction.followup.send(
-                f"⚠ HF API request failed ({response.status_code}):\n```{short_error}```"
-            )
+            return await interaction.followup.send(f"⚠ Image generation failed:\n```{short_error}```")
 
-        # Send result image to Discord
+        # Send result back to Discord
         img_result = BytesIO(response.content)
         img_result.seek(0)
         file = discord.File(img_result, filename="remixed.png")
-        await interaction.followup.send(f"🎨 **SDXL Remix:** {prompt}", file=file)
+        await interaction.followup.send(f"🎨 **Free SD Remix:** {prompt}", file=file)
 
     except Exception as e:
         err_msg = str(e)
-        print(f"[BOT ERROR] {err_msg}")  # Full error in console
+        print(f"[BOT ERROR] {err_msg}")
         short_err = (err_msg[:1900] + "...") if len(err_msg) > 1900 else err_msg
         await interaction.followup.send(f"⚠ Error:\n```{short_err}```")
 
