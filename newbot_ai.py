@@ -137,4 +137,38 @@ async def img(interaction: discord.Interaction, prompt: str):
         print(f"[API ERROR] {e}")
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
+@bot.tree.command(name="remix", description="Remix or modify an image with AI")
+@app_commands.describe(image="The image to remix", prompt="Describe how you want it changed")
+async def remix(interaction: discord.Interaction, image: discord.Attachment, prompt: str):
+    await interaction.response.defer()
+
+    try:
+        # Download the uploaded image
+        img_bytes = await image.read()
+        
+        # Send to OpenAI image API for variation with prompt
+        result = openai_client.images.edit(
+            model="dall-e-3",
+            image=img_bytes,
+            prompt=prompt,
+            n=1
+        )
+
+        if hasattr(result, "data") and len(result.data) > 0 and hasattr(result.data[0], "url"):
+            remix_url = result.data[0].url
+
+            remix_response = requests.get(remix_url)
+            if remix_response.status_code != 200:
+                return await interaction.followup.send(f"⚠ Failed to download remixed image.\nURL: {remix_url}")
+
+            remix_bytes = BytesIO(remix_response.content)
+            remix_bytes.seek(0)
+            file = discord.File(remix_bytes, filename="remixed_image.png")
+            await interaction.followup.send(f"🎨 **Remixed Image:** {prompt}", file=file)
+        else:
+            await interaction.followup.send("⚠ No image was generated for this remix.")
+
+    except Exception as e:
+        await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
+
 bot.run(DISCORD_TOKEN)
