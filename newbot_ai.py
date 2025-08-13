@@ -139,48 +139,57 @@ async def img(interaction: discord.Interaction, prompt: str):
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
 
-@bot.tree.command(name="remix", description="Remix or modify an image with AI")
+HF_API_KEY = os.getenv("HF_API_KEY")
+
+HF_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+
+@bot.tree.command(name="remix", description="Remix or modify an image using SDXL on Hugging Face")
 @app_commands.describe(image="The image to remix", prompt="Describe how you want it changed")
 async def remix(interaction: discord.Interaction, image: discord.Attachment, prompt: str):
     await interaction.response.defer()
 
     try:
-        # Save uploaded image to a temp file with correct extension
+        # Check file extension
         ext = os.path.splitext(image.filename)[1].lower()
         if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
-            return await interaction.followup.send("⚠ Unsupported file format. Please use JPG, PNG, or WEBP.")
+            return await interaction.followup.send("⚠ Please upload a JPG, PNG, or WEBP image.")
 
+        # Save image to temp file
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp.write(await image.read())
             tmp_path = tmp.name
 
-        # Send to OpenAI image API for edit/remix
         with open(tmp_path, "rb") as img_file:
-            result = openai_client.images.edit(
-                model="dall-e-2",
-                image=img_file,
-                prompt=prompt,
-                size="1024x1024",
-                n=1
+            img_bytes = img_file.read()
+
+        os.remove(tmp_path)
+
+        # Hugging Face API request for SDXL image-to-image
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            headers={
+                "Authorization": f"Bearer {HF_API_KEY}"
+            },
+            files={
+                "init_image": ("image.png", img_bytes, "image/png")
+            },
+            data={
+                "prompt": prompt,
+                "strength": 0.8  # 0.0 = preserve image exactly, 1.0 = fully change
+            }
+        )
+
+        if response.status_code != 200:
+            return await interaction.followup.send(
+                f"⚠ HF API request failed: {response.status_code}\n{response.text}"
             )
 
-        os.remove(tmp_path)  # cleanup temp file
-
-        if result.data and result.data[0].url:
-            remix_url = result.data[0].url
-            remix_response = requests.get(remix_url)
-
-            if remix_response.status_code != 200:
-                return await interaction.followup.send(f"⚠ Failed to download remixed image.\nURL: {remix_url}")
-
-            remix_bytes = BytesIO(remix_response.content)
-            remix_bytes.seek(0)
-            file = discord.File(remix_bytes, filename="remixed_image.png")
-            await interaction.followup.send(f"🎨 **Remixed Image:** {prompt}", file=file)
-        else:
-            await interaction.followup.send("⚠ No image was generated for this remix.")
+        img_result = BytesIO(response.content)
+        img_result.seek(0)
+        file = discord.File(img_result, filename="remixed.png")
+        await interaction.followup.send(f"🎨 **SDXL Remix:** {prompt}", file=file)
 
     except Exception as e:
-        await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
+        await interaction.followup.send(f"⚠ Error:\n```{str(e)}```")
 
 bot.run(DISCORD_TOKEN)
