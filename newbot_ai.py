@@ -216,6 +216,77 @@ async def manual_sync(interaction: discord.Interaction, guild_id: Optional[str] 
 
 
 
+@bot.tree.command(name="forget", description="Forget stored memory.")
+@app_commands.describe(
+    scope="What to forget: user, server, or all",
+    target_id="Optional ID of the user or server to target."
+)
+async def forget_memory(interaction: discord.Interaction, scope: str, target_id: Optional[str] = None):
+    """
+    Forget memory from the database based on scope:
+    - user: Forget your own memory (target_id requires admin in that server)
+    - server: Forget current server (target_id requires bot owner)
+    - all: Forget ALL memory (bot owner only)
+    """
+    scope = scope.lower()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    app_info = await bot.application_info()
+    bot_owner_id = app_info.owner.id
+
+    # Forget user memory
+    if scope == "user":
+        if target_id:
+            # Admin-only if targeting another user
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("⛔ Only an admin can forget another user's memory.", ephemeral=True)
+                conn.close()
+                return
+            uid = target_id
+        else:
+            uid = str(interaction.user.id)
+
+        c.execute("DELETE FROM memory WHERE user_id = ?", (uid,))
+        conn.commit()
+        await interaction.response.send_message(f"🧹 Forgotten memory for user ID `{uid}`.", ephemeral=True)
+
+    # Forget server memory
+    elif scope == "server":
+        if target_id:
+            # Owner-only if targeting another server
+            if interaction.user.id != bot_owner_id:
+                await interaction.response.send_message("⛔ Only the bot owner can forget memory for another server.", ephemeral=True)
+                conn.close()
+                return
+            gid = target_id
+        else:
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("⛔ Only an admin can forget this server's memory.", ephemeral=True)
+                conn.close()
+                return
+            gid = str(interaction.guild.id)
+
+        c.execute("DELETE FROM memory WHERE guild_id = ?", (gid,))
+        conn.commit()
+        await interaction.response.send_message(f"🧹 Forgotten memory for server ID `{gid}`.", ephemeral=True)
+
+    # Forget all memory (bot owner only)
+    elif scope == "all":
+        if interaction.user.id != bot_owner_id:
+            await interaction.response.send_message("⛔ Only the bot owner can forget ALL memory.", ephemeral=True)
+            conn.close()
+            return
+        c.execute("DELETE FROM memory")
+        conn.commit()
+        await interaction.response.send_message("💣 All memory has been wiped from the database.", ephemeral=True)
+
+    else:
+        await interaction.response.send_message("❌ Invalid scope. Use `user`, `server`, or `all`.", ephemeral=True)
+
+    conn.close()
+
+
 
 # ====== Start ======
 if __name__ == "__main__":
