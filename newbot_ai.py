@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
+from typing import Optional, List, Dict, Any
 
 # ====== Personalities ======
 BOT_PERSONALITY = """
@@ -50,7 +51,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ====== SQLite Setup ======
 DB_FILE = "memory.db"
 
-def init_db():
+def init_db() -> None:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
@@ -68,7 +69,7 @@ def init_db():
 
 init_db()
 
-def add_to_memory(user_id: int, guild_id: int, role: str, content: str):
+def add_to_memory(user_id: int, guild_id: Optional[int], role: str, content: str) -> None:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
@@ -78,7 +79,7 @@ def add_to_memory(user_id: int, guild_id: int, role: str, content: str):
     conn.commit()
     conn.close()
 
-def get_memory(user_id: int, guild_id: int, limit_user=10, limit_server=20):
+def get_memory(user_id: int, guild_id: Optional[int], limit_user: int = 10, limit_server: int = 20):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
@@ -87,14 +88,14 @@ def get_memory(user_id: int, guild_id: int, limit_user=10, limit_server=20):
         "SELECT role, content FROM memory WHERE user_id = ? ORDER BY id DESC LIMIT ?",
         (str(user_id), limit_user)
     )
-    user_history = [{"role": r, "content": c} for r, c in reversed(c.fetchall())]
+    user_history = [{"role": r, "content": ct} for r, ct in reversed(c.fetchall())]
 
     # Server-specific history
     c.execute(
         "SELECT role, content FROM memory WHERE guild_id = ? ORDER BY id DESC LIMIT ?",
         (str(guild_id) if guild_id else "DM", limit_server)
     )
-    server_history = [{"role": r, "content": c} for r, c in reversed(c.fetchall())]
+    server_history = [{"role": r, "content": ct} for r, ct in reversed(c.fetchall())]
 
     conn.close()
     return user_history, server_history
@@ -140,12 +141,14 @@ async def chat(interaction: discord.Interaction, prompt: str):
 
 # ====== Mention reply ======
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if bot.user.mentioned_in(message):
-        prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() or "Say something in character."
+    if bot.user and bot.user.mentioned_in(message):
+        prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() if bot.user else ""
+        if not prompt:
+            prompt = "Say something in character."
         personality = get_personality(message.author.id)
 
         async with message.channel.typing():
@@ -196,48 +199,8 @@ async def img(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ API Error:\n```{str(e)}```")
 
-# ====== Forget Command ======
-@bot.tree.command(name="forget", description="Clear the bot's conversation memory")
-@app_commands.describe(scope="Choose what to clear: user, server, or all")
-@app_commands.choices(scope=[
-    app_commands.Choice(name="user", value="user"),
-    app_commands.Choice(name="server", value="server"),
-    app_commands.Choice(name="all", value="all"),
-])
-async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-
-    if scope.value == "user":
-        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message("🧹 Your personal memory has been cleared.", ephemeral=True)
-
-    elif scope.value == "server":
-        if not interaction.user.guild_permissions.administrator:
-            conn.close()
-            return await interaction.response.send_message("⚠ You must be an **administrator** to clear server memory.", ephemeral=True)
-        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message("🧹 Server memory has been cleared.")
-
-    elif scope.value == "all":
-        if not interaction.user.guild_permissions.administrator:
-            conn.close()
-            return await interaction.response.send_message("⚠ You must be an **administrator** to clear all memory.", ephemeral=True)
-        c.execute("DELETE FROM memory")
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message("🧹 All memory (user + server) has been cleared.")
-
-    else:
-        conn.close()
-        await interaction.response.send_message("⚠ Invalid scope.", ephemeral=True)
-
 # ====== Helpers for context ======
-def get_user_memory_snippets(user_id: int, guild_id: int, limit=8):
+def get_user_memory_snippets(user_id: int, guild_id: Optional[int], limit: int = 8) -> str:
     """Return a short concatenated snippet of recent messages for a user."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -253,7 +216,7 @@ def get_user_memory_snippets(user_id: int, guild_id: int, limit=8):
     conn.close()
 
     # Only keep 'user' messages; trim long lines.
-    snippets = []
+    snippets: List[str] = []
     for role, content in rows:
         if role != "user":
             continue
@@ -263,7 +226,7 @@ def get_user_memory_snippets(user_id: int, guild_id: int, limit=8):
         snippets.append(f"- {line}")
     return "\n".join(snippets) if snippets else "(no recent user messages)"
 
-def safe_name(member: discord.Member | None) -> str:
+def safe_name(member: Optional[discord.Member]) -> str:
     if not member:
         return "Unknown User"
     return member.display_name or member.name
@@ -284,7 +247,7 @@ async def ship(
     interaction: discord.Interaction,
     person_a: discord.Member,
     person_b: discord.Member,
-    vibe: app_commands.Choice[str] = None,
+    vibe: Optional[app_commands.Choice[str]] = None,
 ):
     await interaction.response.defer()
     try:
@@ -382,8 +345,8 @@ async def poem(
     sender: discord.Member,
     recipient: discord.Member,
     poem_type: app_commands.Choice[str],
-    topic: str | None = None,
-    length: app_commands.Choice[str] = None,
+    topic: Optional[str] = None,
+    length: Optional[app_commands.Choice[str]] = None,
     deliver_privately: bool = False,
 ):
     await interaction.response.defer(ephemeral=deliver_privately)
@@ -483,6 +446,45 @@ End with a one-line signoff like: "— {safe_name(sender)}"
     except Exception as e:
         await interaction.followup.send(f"⚠ Error while generating poem: `{e}`", ephemeral=True)
 
+# ====== Forget Command ======
+@bot.tree.command(name="forget", description="Clear the bot's conversation memory")
+@app_commands.describe(scope="Choose what to clear: user, server, or all")
+@app_commands.choices(scope=[
+    app_commands.Choice(name="user", value="user"),
+    app_commands.Choice(name="server", value="server"),
+    app_commands.Choice(name="all", value="all"),
+])
+async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    if scope.value == "user":
+        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 Your personal memory has been cleared.", ephemeral=True)
+
+    elif scope.value == "server":
+        if not interaction.user.guild_permissions.administrator:
+            conn.close()
+            return await interaction.response.send_message("⚠ You must be an **administrator** to clear server memory.", ephemeral=True)
+        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 Server memory has been cleared.")
+
+    elif scope.value == "all":
+        if not interaction.user.guild_permissions.administrator:
+            conn.close()
+            return await interaction.response.send_message("⚠ You must be an **administrator** to clear all memory.", ephemeral=True)
+        c.execute("DELETE FROM memory")
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 All memory (user + server) has been cleared.")
+
+    else:
+        conn.close()
+        await interaction.response.send_message("⚠ Invalid scope.", ephemeral=True)
 
 # ====== Bot Ready ======
 @bot.event
@@ -490,4 +492,8 @@ async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user} | Slash commands ready")
 
-bot.run(DISCORD_TOKEN)
+# ====== Run Bot ======
+if __name__ == "__main__":
+    if not DISCORD_TOKEN:
+        raise RuntimeError("Missing DISCORD_TOKEN in environment (.env).")
+    bot.run(DISCORD_TOKEN)
