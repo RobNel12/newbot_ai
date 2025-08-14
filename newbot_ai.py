@@ -55,6 +55,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+INSTANT_SYNC_GUILD_ID = 1304124705896136744
+
 # ====== SQLite Setup ======
 DB_FILE = "memory.db"
 
@@ -166,10 +168,19 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     try:
+        # Always instantly sync for the specific guild
+        guild = discord.Object(id=INSTANT_SYNC_GUILD_ID)
+        await bot.tree.sync(guild=guild)
+        print(f"✅ Instantly synced commands for guild {INSTANT_SYNC_GUILD_ID}")
+
+        # Also do a global sync if you still want that
         await bot.tree.sync()
-        print(f"✅ Logged in as {bot.user} | Global slash commands synced")
+        print(f"🌍 Global slash commands synced")
+
+        print(f"🤖 Logged in as {bot.user}")
     except Exception as e:
-        print(f"⚠ Failed to sync global commands: {e}")
+        print(f"⚠ Failed to sync: {e}")
+
 
 # ====== Auto Sync for New Guilds ======
 @bot.event
