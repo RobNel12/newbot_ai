@@ -100,22 +100,39 @@ def get_memory(user_id: int, guild_id: Optional[int], limit_user: int = 10, limi
     return user_history, server_history
 
 # ====== Personality Logic ======
-def get_personality(user_id: int, last_message: Optional[str] = None) -> str:
+def get_personality(user_id: int, current_message: str) -> str:
+    lowered = current_message.lower()
     if user_id == SPECIAL_USER_1_ID:
         return SPECIAL_PERSONALITY_1
     elif user_id == SPECIAL_USER_2_ID:
         return SPECIAL_PERSONALITY_2
-    if last_message:
-        lowered = last_message.lower()
-        for insult in INSULT_KEYWORDS:
-            if insult in lowered:
-                return SCATHING_PERSONALITY
+
+    for insult in INSULT_KEYWORDS:
+        if insult in lowered:
+            # Fetch their past lines for ammo
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute(
+                "SELECT content FROM memory WHERE user_id = ? AND role = 'user' ORDER BY RANDOM() LIMIT 3",
+                (str(user_id),)
+            )
+            past_lines = [row[0] for row in c.fetchall()]
+            conn.close()
+
+            roast_context = ""
+            if past_lines:
+                roast_context = (
+                    "Here are things they have said in the past. "
+                    "Use them against them mercilessly in your insults:\n"
+                    + "\n".join(f"- {line}" for line in past_lines)
+                )
+
+            return f"""{SCATHING_PERSONALITY}
+            {roast_context}
+            """
+
     return BOT_PERSONALITY
 
-def prepend_mention_if_scathing(personality: str, user: discord.User, reply: str) -> str:
-    if personality == SCATHING_PERSONALITY:
-        return f"{user.mention} {reply}"
-    return reply
 
 # ====== Forget Command ======
 @bot.tree.command(name="forget", description="Forget memory for user, server, or all.", guild=discord.Object(id=TEST_GUILD_ID))
