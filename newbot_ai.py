@@ -192,15 +192,20 @@ async def on_guild_join(guild):
         print(f"⚠ Failed to sync commands for {guild.name}: {e}")
 
 # ====== Manual Sync Command ======
-@bot.tree.command(name="sync", description="Manually sync slash commands (Admin only)")
-async def manual_sync(interaction: discord.Interaction):
+@bot.tree.command(name="sync", description="Manually sync slash commands. Can target another server by ID.")
+@app_commands.describe(guild_id="Optional guild ID to sync instantly")
+async def manual_sync(interaction: discord.Interaction, guild_id: Optional[str] = None):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("⛔ You must be an admin to use this command.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
     try:
-        if interaction.guild:
+        if guild_id:
+            target_guild = discord.Object(id=int(guild_id))
+            await bot.tree.sync(guild=target_guild)
+            await interaction.followup.send(f"✅ Instantly synced commands for guild `{guild_id}`.", ephemeral=True)
+        elif interaction.guild:
             await bot.tree.sync(guild=interaction.guild)
             await interaction.followup.send(f"✅ Synced commands for **{interaction.guild.name}**.", ephemeral=True)
         else:
@@ -208,6 +213,7 @@ async def manual_sync(interaction: discord.Interaction):
             await interaction.followup.send("✅ Globally synced commands.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"⚠ Failed to sync commands: {e}", ephemeral=True)
+
 
 
 
