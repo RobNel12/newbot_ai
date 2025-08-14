@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from typing import Optional, List
 
+OWNER_ID = 749469375282675752  # <-- your Discord ID
+
 # ====== Personalities ======
 BOT_PERSONALITY = """
 You are a cool, chill, and supportive friend.
@@ -161,6 +163,65 @@ async def on_message(message: discord.Message):
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "user", prompt)
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "assistant", bot_reply)
     await bot.process_commands(message)
+
+
+@bot.tree.command(name="forget", description="Forget memory for user, server, or all.")
+@app_commands.describe(scope="Choose whose memory to forget: user, server, or all")
+@app_commands.choices(scope=[
+    app_commands.Choice(name="User", value="user"),
+    app_commands.Choice(name="Server", value="server"),
+    app_commands.Choice(name="All", value="all"),
+])
+async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
+
+    if scope.value == "user":
+        # Any user can clear their own history
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message(
+            "🧹 Your personal memory has been wiped.",
+            ephemeral=True
+        )
+
+    elif scope.value == "server":
+        # Require admin perms
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "❌ You do not have permission to wipe server memory.",
+                ephemeral=True
+            )
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message(
+            f"🧹 All memory for **{interaction.guild.name}** has been wiped.",
+            ephemeral=True
+        )
+
+    elif scope.value == "all":
+        # Only bot owner can do this
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message(
+                "❌ You do not have permission to wipe ALL memory.",
+                ephemeral=True
+            )
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory")
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message(
+            "💣 All memory has been wiped from the bot’s database.",
+            ephemeral=True
+        )
+
 
 # ====== Bot Ready ======
 @bot.event
