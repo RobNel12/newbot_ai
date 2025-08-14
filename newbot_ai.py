@@ -165,11 +165,33 @@ async def on_message(message: discord.Message):
 # ====== Bot Ready ======
 @bot.event
 async def on_ready():
+    # Sync globally
     await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user} | Slash commands ready")
+    print(f"✅ Logged in as {bot.user} | Global slash commands synced")
 
-# ====== Run Bot ======
-if __name__ == "__main__":
-    if not DISCORD_TOKEN:
-        raise RuntimeError("Missing DISCORD_TOKEN in environment (.env).")
-    bot.run(DISCORD_TOKEN)
+# ====== Auto Sync for New Guilds ======
+@bot.event
+async def on_guild_join(guild):
+    try:
+        await bot.tree.sync(guild=guild)
+        print(f"🔄 Synced commands instantly for guild: {guild.name} ({guild.id})")
+    except Exception as e:
+        print(f"⚠ Failed to sync commands for {guild.name}: {e}")
+
+# ====== Manual Sync Command ======
+@bot.tree.command(name="sync", description="Manually sync slash commands (Admin only)")
+async def sync_commands(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("⛔ You must be an admin to use this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if interaction.guild:
+            await bot.tree.sync(guild=interaction.guild)
+            await interaction.followup.send(f"✅ Synced commands for **{interaction.guild.name}**.", ephemeral=True)
+        else:
+            await bot.tree.sync()
+            await interaction.followup.send("✅ Globally synced commands.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"⚠ Failed to sync commands: {e}", ephemeral=True)
