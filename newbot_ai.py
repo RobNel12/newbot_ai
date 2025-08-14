@@ -133,10 +133,11 @@ def get_personality(user_id: int, current_message: str) -> str:
 
     return BOT_PERSONALITY
 
-def prepend_mention_if_scathing(personality: str, author: discord.User, reply: str) -> str:
-    if SCATHING_PERSONALITY in personality:
+def prepend_mention_if_scathing(personality: str, author: discord.User, reply: str, already_mentions: bool = False) -> str:
+    if SCATHING_PERSONALITY in personality and not already_mentions:
         return f"{author.mention} {reply}"
     return reply
+
 
 
 # ====== Forget Command ======
