@@ -206,7 +206,7 @@ async def on_message(message: discord.Message):
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() if bot.user else ""
         if not prompt:
             prompt = "Say something in character."
-        personality = get_personality(message.author.id, last_message=prompt)
+        personality = get_personality(message.author.id, prompt)
         async with message.channel.typing():
             user_hist, server_hist = get_memory(message.author.id, message.guild.id if message.guild else None)
             messages = [{"role": "system", "content": personality}]
