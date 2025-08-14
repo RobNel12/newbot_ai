@@ -133,6 +133,11 @@ def get_personality(user_id: int, current_message: str) -> str:
 
     return BOT_PERSONALITY
 
+def prepend_mention_if_scathing(personality: str, author: discord.User, reply: str) -> str:
+    if SCATHING_PERSONALITY in personality:
+        return f"{author.mention} {reply}"
+    return reply
+
 
 # ====== Forget Command ======
 @bot.tree.command(name="forget", description="Forget memory for user, server, or all.", guild=discord.Object(id=TEST_GUILD_ID))
