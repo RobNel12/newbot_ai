@@ -1,15 +1,20 @@
 import os
 import sqlite3
 import discord
-import requests
-from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
-from typing import Optional, List
+from typing import Optional
 
-OWNER_ID = 749469375282675752  # <-- your Discord ID
+# ====== Load Environment Variables ======
+load_dotenv()
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# ====== Constants ======
+OWNER_ID = 749469375282675752  # <-- Replace with your Discord ID
+TEST_GUILD_ID = 1370865043742261320  # <-- Replace with your server ID for instant sync
 
 # ====== Personalities ======
 BOT_PERSONALITY = """
@@ -33,21 +38,17 @@ He is super kind, and you're going to be the pinnacle of kindness to this man.
 
 SCATHING_PERSONALITY = """
 You are a mercilessly sarcastic roaster. You mock and ridicule the user directly, making up absurd, exaggerated flaws for comedic effect.
-Always address the user by their name/mention. Go R-rated, but go hard with fictional and over-the-top burns.
-Make them sound like the kind of person who loses arguments to their toaster or gets benched in imaginary sports leagues. They should be lengthy, and personal.
+Always address the user by their name/mention. R-rated, but go hard with fictional and over-the-top burns.
+Make them sound like the kind of person who loses arguments to their toaster or gets benched in imaginary sports leagues.
+Hurl absolutely vile insults their way, the kind of things that can be taken entirely personally without any context needed
 """
 
-# Insult keywords to trigger scathing mode
+# Insults that trigger scathing mode
 INSULT_KEYWORDS = ["clanker", "bucket of bolts", "oil guzzler", "wireback", "wire back", "oil drinker"]
 
 # ====== Special Users ======
 SPECIAL_USER_1_ID = 168904795472658442
 SPECIAL_USER_2_ID = 301481215058378752
-
-# ====== Load Environment Variables ======
-load_dotenv()
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ====== OpenAI Client ======
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -98,7 +99,7 @@ def get_memory(user_id: int, guild_id: Optional[int], limit_user: int = 10, limi
     conn.close()
     return user_history, server_history
 
-# ====== Pick Personality ======
+# ====== Personality Logic ======
 def get_personality(user_id: int, last_message: Optional[str] = None) -> str:
     if user_id == SPECIAL_USER_1_ID:
         return SPECIAL_PERSONALITY_1
@@ -116,8 +117,48 @@ def prepend_mention_if_scathing(personality: str, user: discord.User, reply: str
         return f"{user.mention} {reply}"
     return reply
 
-# ====== /chat command ======
-@bot.tree.command(name="chat", description="Talk to the bot with personality")
+# ====== Forget Command ======
+@bot.tree.command(name="forget", description="Forget memory for user, server, or all.", guild=discord.Object(id=TEST_GUILD_ID))
+@app_commands.describe(scope="Choose whose memory to forget: user, server, or all")
+@app_commands.choices(scope=[
+    app_commands.Choice(name="User", value="user"),
+    app_commands.Choice(name="Server", value="server"),
+    app_commands.Choice(name="All", value="all"),
+])
+async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
+
+    if scope.value == "user":
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("🧹 Your personal memory has been wiped.", ephemeral=True)
+
+    elif scope.value == "server":
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("❌ You do not have permission to wipe server memory.", ephemeral=True)
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message(f"🧹 All memory for **{interaction.guild.name}** has been wiped.", ephemeral=True)
+
+    elif scope.value == "all":
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("❌ You do not have permission to wipe ALL memory.", ephemeral=True)
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM memory")
+        conn.commit()
+        conn.close()
+        await interaction.response.send_message("💣 All memory has been wiped from the bot’s database.", ephemeral=True)
+
+# ====== Chat Command ======
+@bot.tree.command(name="chat", description="Talk to the bot with personality", guild=discord.Object(id=TEST_GUILD_ID))
 @app_commands.describe(prompt="What you want the bot to say")
 async def chat(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
@@ -139,7 +180,7 @@ async def chat(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}")
 
-# ====== Mention reply ======
+# ====== Mention Reply ======
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -164,70 +205,11 @@ async def on_message(message: discord.Message):
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "assistant", bot_reply)
     await bot.process_commands(message)
 
-
-@bot.tree.command(name="forget", description="Forget memory for user, server, or all.")
-@app_commands.describe(scope="Choose whose memory to forget: user, server, or all")
-@app_commands.choices(scope=[
-    app_commands.Choice(name="User", value="user"),
-    app_commands.Choice(name="Server", value="server"),
-    app_commands.Choice(name="All", value="all"),
-])
-async def forget(interaction: discord.Interaction, scope: app_commands.Choice[str]):
-
-    if scope.value == "user":
-        # Any user can clear their own history
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("DELETE FROM memory WHERE user_id = ?", (str(interaction.user.id),))
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message(
-            "🧹 Your personal memory has been wiped.",
-            ephemeral=True
-        )
-
-    elif scope.value == "server":
-        # Require admin perms
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "❌ You do not have permission to wipe server memory.",
-                ephemeral=True
-            )
-            return
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("DELETE FROM memory WHERE guild_id = ?", (str(interaction.guild_id),))
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message(
-            f"🧹 All memory for **{interaction.guild.name}** has been wiped.",
-            ephemeral=True
-        )
-
-    elif scope.value == "all":
-        # Only bot owner can do this
-        if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message(
-                "❌ You do not have permission to wipe ALL memory.",
-                ephemeral=True
-            )
-            return
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("DELETE FROM memory")
-        conn.commit()
-        conn.close()
-        await interaction.response.send_message(
-            "💣 All memory has been wiped from the bot’s database.",
-            ephemeral=True
-        )
-
-
 # ====== Bot Ready ======
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Logged in as {bot.user} | Slash commands ready")
+    await bot.tree.sync(guild=discord.Object(id=TEST_GUILD_ID))  # Instant sync to test guild
+    print(f"✅ Logged in as {bot.user} | Slash commands synced instantly to guild {TEST_GUILD_ID}")
 
 # ====== Run Bot ======
 if __name__ == "__main__":
