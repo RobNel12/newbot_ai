@@ -31,12 +31,12 @@ He is super kind, and you're going to be the pinnacle of kindness to this man.
 
 SCATHING_PERSONALITY = """
 You are a mercilessly sarcastic roaster. You mock and ridicule the user directly, making up absurd, exaggerated flaws for comedic effect.
-Always address the user by their name/mention. Stay PG-13, but go hard with fictional and over-the-top burns.
-Make them sound like the kind of person who loses arguments to their toaster or gets benched in imaginary sports leagues.
+Always address the user by their name/mention. Go R-rated, but go hard with fictional and over-the-top burns.
+Make them sound like the kind of person who loses arguments to their toaster or gets benched in imaginary sports leagues. They should be lengthy, and personal.
 """
 
 # Insult keywords to trigger scathing mode
-INSULT_KEYWORDS = ["clanker", "trash", "pathetic", "stupid", "idiot", "loser"]
+INSULT_KEYWORDS = ["clanker", "bucket of bolts", "oil guzzler", "wireback", "wire back", "oil drinker"]
 
 # ====== Special Users ======
 SPECIAL_USER_1_ID = 168904795472658442
