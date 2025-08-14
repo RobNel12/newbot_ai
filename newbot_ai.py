@@ -197,3 +197,12 @@ async def manual_sync(interaction: discord.Interaction):
             await interaction.followup.send("✅ Globally synced commands.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"⚠ Failed to sync commands: {e}", ephemeral=True)
+
+
+
+# ====== Start ======
+if __name__ == "__main__":
+    if not DISCORD_TOKEN:
+        raise RuntimeError("Missing DISCORD_TOKEN in environment (.env).")
+    print("🚀 Starting bot now...")
+    bot.run(DISCORD_TOKEN)
