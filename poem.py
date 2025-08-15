@@ -39,7 +39,7 @@ class Poem(commands.Cog):
                     {"role": "system", "content": style_prompts[style.value]},
                     {"role": "user", "content": f"Write the full poem for {target.display_name} now."}
                 ],
-                max_tokens=200
+                max_tokens=500
             )
 
             poem_text = response.choices[0].message.content
