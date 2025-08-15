@@ -2,6 +2,7 @@ import os
 import sqlite3
 import discord
 import requests
+import asyncio
 from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
@@ -289,6 +290,16 @@ async def forget_memory(interaction: discord.Interaction, scope: str, target_id:
 
 
 # ====== Start ======
+aync def load_cogs():
+    await bot.load_extension("cogs.poem")
+
+async def main():
+    await load_cogs()
+    await bot.start(DISCORD_TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("Missing DISCORD_TOKEN in environment (.env).")
