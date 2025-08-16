@@ -145,6 +145,11 @@ async def chat(interaction: discord.Interaction, prompt: str):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    # Ignore @everyone and @here mentions
+    if message.mention_everyone:
+        return
+
     if bot.user and bot.user.mentioned_in(message):
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() if bot.user else ""
         if not prompt:
@@ -163,6 +168,7 @@ async def on_message(message: discord.Message):
         await message.channel.send(bot_reply)
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "user", prompt)
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "assistant", bot_reply)
+
     await bot.process_commands(message)
 
 # ====== Bot Ready ======
