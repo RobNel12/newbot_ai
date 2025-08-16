@@ -51,10 +51,27 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # ====== OpenAI Client ======
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+# ====== Helpers (NEW) ======
+def sanitize_mentions(text: str) -> str:
+    """Prevent @everyone and @here from pinging by inserting a zero-width space."""
+    if not text:
+        return text
+    return text.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
+
 # ====== Discord Bot Setup ======
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Disallow @everyone and role pings globally (NEW)
+default_allowed_mentions = discord.AllowedMentions(
+    everyone=False, roles=False, users=True, replied_user=False
+)
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=default_allowed_mentions,  # NEW
+)
 
 INSTANT_SYNC_GUILD_ID = 1304124705896136744
 
@@ -134,11 +151,12 @@ async def chat(interaction: discord.Interaction, prompt: str):
                 model="gpt-4o-mini", messages=messages, max_tokens=500
             )
         bot_reply = prepend_mention_if_scathing(personality, interaction.user, response.choices[0].message.content)
-        await interaction.followup.send(bot_reply)
+        bot_reply = sanitize_mentions(bot_reply)  # NEW
+        await interaction.followup.send(bot_reply, allowed_mentions=default_allowed_mentions)  # NEW
         add_to_memory(interaction.user.id, interaction.guild_id, "user", prompt)
         add_to_memory(interaction.user.id, interaction.guild_id, "assistant", bot_reply)
     except Exception as e:
-        await interaction.followup.send(f"⚠ Error: {e}")
+        await interaction.followup.send(f"⚠ Error: {e}", allowed_mentions=default_allowed_mentions)  # NEW
 
 # ====== Mention reply ======
 @bot.event
@@ -146,11 +164,12 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Ignore @everyone and @here mentions
+    # Ignore @everyone / @here entirely (NEW)
     if message.mention_everyone:
         return
 
     if bot.user and bot.user.mentioned_in(message):
+        # Even if the bot is mentioned alongside @everyone/@here, we already returned above (NEW)
         prompt = message.content.replace(f"<@{bot.user.id}>", "").strip() if bot.user else ""
         if not prompt:
             prompt = "Say something in character."
@@ -165,7 +184,8 @@ async def on_message(message: discord.Message):
                 model="gpt-4o-mini", messages=messages, max_tokens=500
             )
         bot_reply = prepend_mention_if_scathing(personality, message.author, response.choices[0].message.content)
-        await message.channel.send(bot_reply)
+        bot_reply = sanitize_mentions(bot_reply)  # NEW
+        await message.channel.send(bot_reply, allowed_mentions=default_allowed_mentions)  # NEW
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "user", prompt)
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "assistant", bot_reply)
 
@@ -187,7 +207,6 @@ async def on_ready():
         print(f"🤖 Logged in as {bot.user}")
     except Exception as e:
         print(f"⚠ Failed to sync: {e}")
-
 
 # ====== Auto Sync for New Guilds ======
 @bot.event
@@ -220,8 +239,6 @@ async def manual_sync(interaction: discord.Interaction, guild_id: Optional[str] 
             await interaction.followup.send("✅ Globally synced commands.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"⚠ Failed to sync commands: {e}", ephemeral=True)
-
-
 
 @bot.tree.command(name="forget", description="Forget stored memory.")
 @app_commands.describe(
@@ -293,8 +310,6 @@ async def forget_memory(interaction: discord.Interaction, scope: str, target_id:
 
     conn.close()
 
-
-
 # ====== Start ======
 async def load_cogs():
     await bot.load_extension("cogs.poem")
@@ -310,4 +325,5 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         raise RuntimeError("Missing DISCORD_TOKEN in environment (.env).")
     print("🚀 Starting bot now...")
+    # Using bot.run() keeps allowed_mentions defaults in effect (NEW)
     bot.run(DISCORD_TOKEN)
