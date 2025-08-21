@@ -13,7 +13,7 @@ from typing import Optional, List
 
 # ====== Blocklist for memory safety ======
 BLOCKLIST = [
-    "slur1", "slur2", "slur3",  # Replace with actual terms
+    "nigger", "faggot", "fag",  # Replace with actual terms
 ]
 
 BLOCKLIST_FILE = "blocklist.json"
