@@ -3,6 +3,7 @@ import sqlite3
 import discord
 import requests
 import asyncio
+import json
 from io import BytesIO
 from discord import app_commands
 from discord.ext import commands
