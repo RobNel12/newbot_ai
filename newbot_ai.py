@@ -10,6 +10,20 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from typing import Optional, List
 
+# ====== Blocklist for memory safety ======
+BLOCKLIST = [
+    "slur1", "slur2", "slur3",  # Replace with actual terms
+]
+
+BLOCKLIST_FILE = "blocklist.json"
+
+def load_blocklist() -> list:
+    if not os.path.exists(BLOCKLIST_FILE):
+        return []
+    with open(BLOCKLIST_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 # ====== Personalities ======
 BOT_PERSONALITY = """
 You are a cool, chill, and supportive friend.
@@ -51,7 +65,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # ====== OpenAI Client ======
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ====== Helpers (NEW) ======
+# ============== SANITIZE ===============
+def sanitize_content(content: str) -> str:
+    """Remove or replace blocklisted words before storing in memory."""
+    lowered = content.lower()
+    for bad_word in BLOCKLIST:
+        if bad_word in lowered:
+            content = content.replace(bad_word, "[REDACTED]")
+    return content
+
 def sanitize_mentions(text: str) -> str:
     """Prevent @everyone and @here from pinging by inserting a zero-width space."""
     if not text:
@@ -97,14 +119,16 @@ def init_db() -> None:
 init_db()
 
 def add_to_memory(user_id: int, guild_id: Optional[int], role: str, content: str) -> None:
+    safe_content = sanitize_content(content)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
         "INSERT INTO memory (user_id, guild_id, role, content) VALUES (?, ?, ?, ?)",
-        (str(user_id), str(guild_id) if guild_id else "DM", role, content)
+        (str(user_id), str(guild_id) if guild_id else "DM", role, safe_content)
     )
     conn.commit()
     conn.close()
+
 
 def get_memory(user_id: int, guild_id: Optional[int], limit_user: int = 10, limit_server: int = 20):
     conn = sqlite3.connect(DB_FILE)
@@ -245,6 +269,12 @@ async def manual_sync(interaction: discord.Interaction, guild_id: Optional[str] 
     scope="What to forget: user, server, or all",
     target_id="Optional ID of the user or server to target."
 )
+
+
+
+
+# ============== FORGET ===============
+
 async def forget_memory(interaction: discord.Interaction, scope: str, target_id: Optional[str] = None):
     """
     Forget memory from the database based on scope:
