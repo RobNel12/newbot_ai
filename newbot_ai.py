@@ -190,21 +190,21 @@ async def image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
         async with interaction.channel.typing():
-            # Call OpenAI Images API
+            # Generate the image (base64 so we can upload to Discord)
             result = openai_client.images.generate(
                 model="gpt-image-1",   # DALL·E 3
                 prompt=prompt,
                 size="1024x1024",
                 n=1,
-                response_format="b64_json"  # get raw base64 data
+                base64_json=True
             )
 
-            # Decode image
+            # Decode the base64
             import base64
             image_b64 = result.data[0].b64_json
             image_bytes = base64.b64decode(image_b64)
 
-            # Wrap into Discord file
+            # Send to Discord
             file = discord.File(
                 fp=BytesIO(image_bytes),
                 filename="generated.png"
@@ -214,6 +214,7 @@ async def image(interaction: discord.Interaction, prompt: str):
 
     except Exception as e:
         await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
+
 
 
 # ====== Mention reply ======
