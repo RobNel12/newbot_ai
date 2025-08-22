@@ -189,24 +189,23 @@ async def chat(interaction: discord.Interaction, prompt: str):
 async def image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
+        import requests
+
         async with interaction.channel.typing():
-            # Generate image (new client always returns URLs)
+            # Generate the image (returns JSON/dict style in your SDK)
             result = openai_client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
                 size="1024x1024"
             )
 
-            # The URL is here
-            image_url = result.data[0].url
+            # Access dict instead of object
+            image_url = result["data"][0]["url"]
 
-            print(result)
-            print(result.data)
-            print(result.data[0])
+            if not image_url or not image_url.startswith("http"):
+                raise ValueError(f"OpenAI did not return a valid URL: {image_url}")
 
-
-            # Download the image from the URL
-            import requests
+            # Download image
             resp = requests.get(image_url)
             resp.raise_for_status()
 
@@ -216,7 +215,6 @@ async def image(interaction: discord.Interaction, prompt: str):
 
     except Exception as e:
         await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
-
 
 # ====== Mention reply ======
 @bot.event
