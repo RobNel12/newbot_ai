@@ -183,6 +183,39 @@ async def chat(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}", allowed_mentions=default_allowed_mentions)  # NEW
 
+# ====== /image command ======
+@bot.tree.command(name="image", description="Generate an image with DALL·E 3")
+@app_commands.describe(prompt="What you want the image to be of")
+async def image(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+    try:
+        async with interaction.channel.typing():
+            # Call OpenAI Images API
+            result = openai_client.images.generate(
+                model="gpt-image-1",   # DALL·E 3
+                prompt=prompt,
+                size="1024x1024",
+                n=1,
+                response_format="b64_json"  # get raw base64 data
+            )
+
+            # Decode image
+            import base64
+            image_b64 = result.data[0].b64_json
+            image_bytes = base64.b64decode(image_b64)
+
+            # Wrap into Discord file
+            file = discord.File(
+                fp=BytesIO(image_bytes),
+                filename="generated.png"
+            )
+
+        await interaction.followup.send(content=f"🎨 Prompt: `{prompt}`", file=file)
+
+    except Exception as e:
+        await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
+
+
 # ====== Mention reply ======
 @bot.event
 async def on_message(message: discord.Message):
@@ -215,35 +248,6 @@ async def on_message(message: discord.Message):
         add_to_memory(message.author.id, message.guild.id if message.guild else None, "assistant", bot_reply)
 
     await bot.process_commands(message)
-
-# ====== /image command ======
-@bot.tree.command(name="image", description="Generate an image with DALL·E 3")
-@app_commands.describe(prompt="What you want the image to be of")
-async def image(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
-    try:
-        async with interaction.channel.typing():
-            # Call OpenAI Images API
-            result = openai_client.images.generate(
-                model="gpt-image-1",   # DALL·E 3
-                prompt=prompt,
-                size="1024x1024",      # You can also allow options: 256x256, 512x512, 1024x1024
-                n=1
-            )
-
-            image_url = result.data[0].url
-
-        embed = discord.Embed(
-            title="🎨 Your Image",
-            description=f"Prompt: `{prompt}`",
-            color=discord.Color.blurple()
-        )
-        embed.set_image(url=image_url)
-
-        await interaction.followup.send(embed=embed)
-
-    except Exception as e:
-        await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
 
 
 # ====== Bot Ready ======
