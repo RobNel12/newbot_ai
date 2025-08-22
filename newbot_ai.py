@@ -190,17 +190,17 @@ async def image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
         async with interaction.channel.typing():
-            # Generate the image (DALL·E 3 returns a URL by default)
+            # Generate image (new client always returns URLs)
             result = openai_client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
-                size="1024x1024",
-                n=1
+                size="1024x1024"
             )
 
+            # The URL is here
             image_url = result.data[0].url
 
-            # Download image from URL
+            # Download the image from the URL
             import requests
             resp = requests.get(image_url)
             resp.raise_for_status()
@@ -211,8 +211,6 @@ async def image(interaction: discord.Interaction, prompt: str):
 
     except Exception as e:
         await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
-
-
 
 
 # ====== Mention reply ======
