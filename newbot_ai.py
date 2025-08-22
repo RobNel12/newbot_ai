@@ -200,6 +200,11 @@ async def image(interaction: discord.Interaction, prompt: str):
             # The URL is here
             image_url = result.data[0].url
 
+            print(result)
+            print(result.data)
+            print(result.data[0])
+
+
             # Download the image from the URL
             import requests
             resp = requests.get(image_url)
