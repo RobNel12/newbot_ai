@@ -183,38 +183,40 @@ async def chat(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"⚠ Error: {e}", allowed_mentions=default_allowed_mentions)  # NEW
 
-# ====== /image command ======
 @bot.tree.command(name="image", description="Generate an image with DALL·E 3")
 @app_commands.describe(prompt="What you want the image to be of")
 async def image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
-        import requests
+        import base64, requests
 
         async with interaction.channel.typing():
-            # Generate the image (returns JSON/dict style in your SDK)
             result = openai_client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
                 size="1024x1024"
             )
 
-            # Access dict instead of object
-            image_url = result["data"][0]["url"]
+            # Prefer URL if available
+            image_url = getattr(result.data[0], "url", None)
+            if image_url:
+                resp = requests.get(image_url)
+                resp.raise_for_status()
+                image_bytes = resp.content
+            else:
+                # Fallback to base64 if no URL
+                image_b64 = getattr(result.data[0], "b64_json", None)
+                if not image_b64:
+                    raise ValueError(f"OpenAI returned no usable image: {result.data[0]}")
+                image_bytes = base64.b64decode(image_b64)
 
-            if not image_url or not image_url.startswith("http"):
-                raise ValueError(f"OpenAI did not return a valid URL: {image_url}")
-
-            # Download image
-            resp = requests.get(image_url)
-            resp.raise_for_status()
-
-            file = discord.File(BytesIO(resp.content), filename="generated.png")
+            file = discord.File(BytesIO(image_bytes), filename="generated.png")
 
         await interaction.followup.send(content=f"🎨 Prompt: `{prompt}`", file=file)
 
     except Exception as e:
         await interaction.followup.send(f"⚠ Error generating image: `{e}`", ephemeral=True)
+
 
 # ====== Mention reply ======
 @bot.event
