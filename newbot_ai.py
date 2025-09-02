@@ -63,7 +63,23 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# ====== OpenAI Client ======
+# ====== Discord Bot Setup ======
+intents = discord.Intents.default()
+intents.message_content = True
+
+# Disallow @everyone and role pings globally (NEW)
+default_allowed_mentions = discord.AllowedMentions(
+    everyone=False, roles=False, users=True, replied_user=False
+)
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=default_allowed_mentions,  # NEW
+)
+
+INSTANT_SYNC_GUILD_ID = 1304124705896136744
+
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 bot.openai_client = openai_client
@@ -84,24 +100,6 @@ def sanitize_mentions(text: str) -> str:
         return text
     return text.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
 
-# ====== Discord Bot Setup ======
-intents = discord.Intents.default()
-intents.message_content = True
-
-# Disallow @everyone and role pings globally (NEW)
-default_allowed_mentions = discord.AllowedMentions(
-    everyone=False, roles=False, users=True, replied_user=False
-)
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    allowed_mentions=default_allowed_mentions,  # NEW
-)
-
-bot.openai_client = openai_client
-
-INSTANT_SYNC_GUILD_ID = 1304124705896136744
 
 # ====== SQLite Setup ======
 DB_FILE = "memory.db"
