@@ -1,22 +1,42 @@
-# cogs/rpg.py
+# cogs/ai_rpg.py
 import asyncio
+import json
 import random
 import sqlite3
 import time
-from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Tuple
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+DB_FILE = "rpg_ai.db"
 
-DB_FILE = "rpg.db"
+# Cooldowns (seconds)
+MINE_COOLDOWN = 60
+TRAIN_COOLDOWN = 45
+ADVENTURE_COOLDOWN = 60
+GAMBLE_COOLDOWN = 10
 
+# Safety clamps to keep AI outputs fair & playable
+MAX_ITEM_BONUS = 5          # per stat per item
+MAX_ENEMY_STAT = 18         # enemy atk/def cap
+MAX_ENEMY_HP = 60
+MIN_ENEMY_HP = 8
+SHOP_ITEMS_PER_DAY = (3, 5) # inclusive range
+
+JSON_FORMAT_HINT = (
+    "Always respond as a single JSON object with only the requested fields. "
+    "Do not include code fences or extra commentary."
+)
+
+# ---------- DB ----------
 CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS rpg_users (
     user_id TEXT NOT NULL,
     guild_id TEXT NOT NULL,
-    coins INTEGER NOT NULL DEFAULT 100,
+    coins INTEGER NOT NULL DEFAULT 120,
     hp INTEGER NOT NULL DEFAULT 20,
     atk INTEGER NOT NULL DEFAULT 5,
     def INTEGER NOT NULL DEFAULT 3,
@@ -40,179 +60,58 @@ CREATE TABLE IF NOT EXISTS rpg_inventory (
 );
 """
 
-SHOP_STOCK = [
-    # name, cost, effect, value
-    ("Small Potion", 20, "hp", 10),
-    ("Iron Dagger", 60, "atk", 2),
-    ("Leather Vest", 60, "def", 2),
-    ("Training Manual", 120, "xp", 25),
-]
-
-MINE_COOLDOWN = 60          # seconds
-TRAIN_COOLDOWN = 45
-ADVENTURE_COOLDOWN = 60
-GAMBLE_COOLDOWN = 10
-
+CREATE_SHOP_CACHE = """
+CREATE TABLE IF NOT EXISTS rpg_shop_cache (
+    guild_id TEXT NOT NULL,
+    yyyymmdd TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    PRIMARY KEY (guild_id, yyyymmdd)
+);
+"""
 
 def _connect():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def _init_db():
     with _connect() as c:
         c.execute(CREATE_USERS)
         c.execute(CREATE_INV)
+        c.execute(CREATE_SHOP_CACHE)
 _init_db()
-
 
 def _now() -> int:
     return int(time.time())
 
+def _today_key() -> str:
+    # UTC is fine for daily shop rotation
+    return time.strftime("%Y%m%d", time.gmtime())
 
-class RPGView(discord.ui.View):
-    """Main menu View with a Select to navigate sub-panels."""
-    def __init__(self, cog: "RPGCog", user_id: int):
-        super().__init__(timeout=180)
-        self.cog = cog
-        self.user_id = str(user_id)
+# ---------- Data helpers ----------
+@dataclass
+class Player:
+    user_id: int
+    guild_id: int
+    coins: int
+    hp: int
+    atk: int
+    deff: int
+    lvl: int
+    xp: int
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Only the opener can use the controls.
-        return str(interaction.user.id) == self.user_id
-
-    @discord.ui.select(
-        placeholder="Choose an activity…",
-        min_values=1, max_values=1,
-        options=[
-            discord.SelectOption(label="Profile", description="View your stats & wallet", emoji="🧙"),
-            discord.SelectOption(label="Inventory", description="Items you own", emoji="🎒"),
-            discord.SelectOption(label="Shop", description="Buy items to boost stats", emoji="🛒"),
-            discord.SelectOption(label="Training Ring", description="Train to raise stats", emoji="🥊"),
-            discord.SelectOption(label="Mine / Work", description="Earn wages with a short cooldown", emoji="⛏️"),
-            discord.SelectOption(label="Gambling", description="Dice & coinflip (use responsibly!)", emoji="🎲"),
-            discord.SelectOption(label="Adventure", description="Fight a quick encounter for XP/loot", emoji="🗺️"),
-        ]
-    )
-    async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
-        choice = select.values[0]
-        if choice == "Profile":
-            embed = self.cog.embed_profile(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=embed, view=self)
-        elif choice == "Inventory":
-            embed = self.cog.embed_inventory(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=embed, view=self)
-        elif choice == "Shop":
-            embed = self.cog.embed_shop(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=embed, view=ShopView(self.cog, self.user_id))
-        elif choice == "Training Ring":
-            embed = self.cog.embed_training(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=embed, view=TrainView(self.cog, self.user_id))
-        elif choice == "Mine / Work":
-            result = await self.cog.do_mine(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=result, view=self)
-        elif choice == "Gambling":
-            embed = self.cog.embed_gamble()
-            await interaction.response.edit_message(embed=embed, view=GambleView(self.cog, self.user_id))
-        elif choice == "Adventure":
-            result = await self.cog.do_adventure(interaction.user.id, interaction.guild_id)
-            await interaction.response.edit_message(embed=result, view=self)
-
-
-class ShopView(discord.ui.View):
-    def __init__(self, cog: "RPGCog", user_id: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return str(interaction.user.id) == self.user_id
-
-    @discord.ui.button(label="Buy Potion (20)", style=discord.ButtonStyle.primary)
-    async def buy_potion(self, interaction: discord.Interaction, _):
-        embed = self.cog.handle_purchase(interaction.user.id, interaction.guild_id, "Small Potion")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Buy Dagger (60)", style=discord.ButtonStyle.primary)
-    async def buy_dagger(self, interaction: discord.Interaction, _):
-        embed = self.cog.handle_purchase(interaction.user.id, interaction.guild_id, "Iron Dagger")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Buy Vest (60)", style=discord.ButtonStyle.primary)
-    async def buy_vest(self, interaction: discord.Interaction, _):
-        embed = self.cog.handle_purchase(interaction.user.id, interaction.guild_id, "Leather Vest")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Buy Manual (120)", style=discord.ButtonStyle.success)
-    async def buy_manual(self, interaction: discord.Interaction, _):
-        embed = self.cog.handle_purchase(interaction.user.id, interaction.guild_id, "Training Manual")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, _):
-        await interaction.response.edit_message(
-            embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
-            view=RPGView(self.cog, interaction.user.id)
-        )
-
-
-class TrainView(discord.ui.View):
-    def __init__(self, cog: "RPGCog", user_id: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return str(interaction.user.id) == self.user_id
-
-    @discord.ui.button(label="Train (45s cd, 15c)", style=discord.ButtonStyle.success, emoji="🏋️")
-    async def do_train(self, interaction: discord.Interaction, _):
-        embed = await self.cog.do_train(interaction.user.id, interaction.guild_id)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, _):
-        await interaction.response.edit_message(
-            embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
-            view=RPGView(self.cog, interaction.user.id)
-        )
-
-
-class GambleView(discord.ui.View):
-    def __init__(self, cog: "RPGCog", user_id: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return str(interaction.user.id) == self.user_id
-
-    @discord.ui.button(label="Roll d20 (bet 10)", style=discord.ButtonStyle.primary, emoji="🎲")
-    async def roll_d20(self, interaction: discord.Interaction, _):
-        embed = await self.cog.do_roll(interaction.user.id, interaction.guild_id)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Coinflip (bet 10)", style=discord.ButtonStyle.primary, emoji="🪙")
-    async def coinflip(self, interaction: discord.Interaction, _):
-        embed = await self.cog.do_coinflip(interaction.user.id, interaction.guild_id)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, _):
-        await interaction.response.edit_message(
-            embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
-            view=RPGView(self.cog, interaction.user.id)
-        )
-
-
-class RPGCog(commands.Cog):
-    """Fun games & mini-RPG with a single menu entry point (/rpg)."""
+# ---------- Cog ----------
+class AIRPGCog(commands.Cog):
+    """AI-powered mini-RPG with /rpg menu (shop, training, mine, gambling, adventure)."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ---------- Utilities ----------
+    # ===== Utilities =====
+    def _client(self):
+        # Tries to reuse your already-initialized client: main file should set bot.openai_client = openai_client
+        return getattr(self.bot, "openai_client", None)
+
     def ensure_user(self, user_id: int, guild_id: int):
         with _connect() as c:
             cur = c.execute("SELECT 1 FROM rpg_users WHERE user_id=? AND guild_id=?", (str(user_id), str(guild_id)))
@@ -223,10 +122,7 @@ class RPGCog(commands.Cog):
     def get_user(self, user_id: int, guild_id: int) -> sqlite3.Row:
         self.ensure_user(user_id, guild_id)
         with _connect() as c:
-            row = c.execute(
-                "SELECT * FROM rpg_users WHERE user_id=? AND guild_id=?",
-                (str(user_id), str(guild_id))
-            ).fetchone()
+            row = c.execute("SELECT * FROM rpg_users WHERE user_id=? AND guild_id=?", (str(user_id), str(guild_id))).fetchone()
         return row
 
     def set_user(self, user_id: int, guild_id: int, **updates):
@@ -245,15 +141,11 @@ class RPGCog(commands.Cog):
                 (str(user_id), str(guild_id), item)
             ).fetchone()
             if row:
-                c.execute(
-                    "UPDATE rpg_inventory SET qty=qty+? WHERE user_id=? AND guild_id=? AND item=?",
-                    (qty, str(user_id), str(guild_id), item)
-                )
+                c.execute("UPDATE rpg_inventory SET qty=qty+? WHERE user_id=? AND guild_id=? AND item=?",
+                          (qty, str(user_id), str(guild_id), item))
             else:
-                c.execute(
-                    "INSERT INTO rpg_inventory (user_id, guild_id, item, qty) VALUES (?, ?, ?, ?)",
-                    (str(user_id), str(guild_id), item, qty)
-                )
+                c.execute("INSERT INTO rpg_inventory (user_id, guild_id, item, qty) VALUES (?, ?, ?, ?)",
+                          (str(user_id), str(guild_id), item, qty))
             c.commit()
 
     def inv_all(self, user_id: int, guild_id: int) -> List[Tuple[str, int]]:
@@ -264,7 +156,7 @@ class RPGCog(commands.Cog):
             ).fetchall()
         return [(r["item"], r["qty"]) for r in rows]
 
-    # ---------- Embeds ----------
+    # ===== Embeds =====
     def embed_profile(self, user_id: int, guild_id: int) -> discord.Embed:
         u = self.get_user(user_id, guild_id)
         e = discord.Embed(title="🧙 Your Profile", color=discord.Color.blurple())
@@ -274,52 +166,134 @@ class RPGCog(commands.Cog):
         e.add_field(name="ATK", value=str(u["atk"]))
         e.add_field(name="DEF", value=str(u["def"]))
         e.add_field(name="Coins", value=str(u["coins"]))
-        e.set_footer(text="Use the menu to explore activities.")
+        e.set_footer(text="Use the menu below.")
         return e
 
     def embed_inventory(self, user_id: int, guild_id: int) -> discord.Embed:
         items = self.inv_all(user_id, guild_id)
-        if not items:
-            desc = "_Empty._ Visit the Shop to buy gear & items."
-        else:
-            desc = "\n".join([f"• **{name}** ×{qty}" for name, qty in items])
-        e = discord.Embed(title="🎒 Inventory", description=desc, color=discord.Color.dark_teal())
-        return e
+        desc = "_Empty._" if not items else "\n".join([f"• **{n}** ×{q}" for n, q in items])
+        return discord.Embed(title="🎒 Inventory", description=desc, color=discord.Color.dark_teal())
 
-    def embed_shop(self, user_id: int, guild_id: int) -> discord.Embed:
+    # ===== AI Glue =====
+    async def _ai_chat_json(self, sys_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
+        """
+        Calls your existing openai_client.chat.completions.create and asks for a JSON object.
+        Returns parsed dict or None on failure.
+        """
+        client = self._client()
+        if not client:
+            return None
+
+        try:
+            resp = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_prompt + "\n\n" + JSON_FORMAT_HINT},
+                    ],
+                    temperature=0.9,
+                    max_tokens=600,
+                )
+            )
+            content = resp.choices[0].message.content
+            return json.loads(content)
+        except Exception:
+            return None
+
+    # ===== AI Shop (rotates daily per guild) =====
+    def _shop_cache_get(self, guild_id: int) -> Optional[List[Dict[str, Any]]]:
+        k = _today_key()
+        with _connect() as c:
+            row = c.execute("SELECT data_json FROM rpg_shop_cache WHERE guild_id=? AND yyyymmdd=?",
+                            (str(guild_id), k)).fetchone()
+            if row:
+                try:
+                    return json.loads(row["data_json"])
+                except Exception:
+                    return None
+        return None
+
+    def _shop_cache_set(self, guild_id: int, items: List[Dict[str, Any]]):
+        k = _today_key()
+        with _connect() as c:
+            c.execute("INSERT OR REPLACE INTO rpg_shop_cache (guild_id, yyyymmdd, data_json) VALUES (?, ?, ?)",
+                      (str(guild_id), k, json.dumps(items)))
+            c.commit()
+
+    async def get_ai_shop(self, guild_id: int, avg_player_lvl: int) -> List[Dict[str, Any]]:
+        # Use cache if available
+        cached = self._shop_cache_get(guild_id)
+        if cached:
+            return cached
+
+        # Ask AI to generate items
+        n_min, n_max = SHOP_ITEMS_PER_DAY
+        n_items = random.randint(n_min, n_max)
+        sys_p = (
+            "You design balanced, whimsical RPG shop items for a mini text RPG. "
+            "Output a JSON object with key 'items' as a list. Each item has: "
+            "{name:str, description:str (<=120 chars), cost:int (20..160), "
+            "effects:[{stat:str in ['hp','atk','def','xp'], amount:int (1..5)}]}"
+        )
+        user_p = (
+            f"Create {n_items} shop items for average player level {avg_player_lvl}. "
+            "Items should be interesting but fair. No duplicates. Keep effects small. "
+            "Prefer 1-2 effects per item. Avoid pure XP items."
+        )
+
+        data = await self._ai_chat_json(sys_p, user_p)
+        items: List[Dict[str, Any]] = []
+        if data and isinstance(data.get("items"), list):
+            for it in data["items"]:
+                name = str(it.get("name", "Mysterious Trinket"))[:50]
+                desc = str(it.get("description", "An odd curio."))[:120]
+                cost = int(it.get("cost", random.randint(30, 100)))
+                cost = max(10, min(cost, 300))
+                effects = []
+                for eff in it.get("effects", []):
+                    stat = str(eff.get("stat", "hp"))
+                    if stat not in ("hp", "atk", "def", "xp"):
+                        continue
+                    amt = int(eff.get("amount", 1))
+                    amt = max(1, min(amt, MAX_ITEM_BONUS))
+                    effects.append({"stat": stat, "amount": amt})
+                if not effects:
+                    effects = [{"stat": "hp", "amount": 2}]
+                items.append({"name": name, "description": desc, "cost": cost, "effects": effects})
+
+        # Fallback items if AI missing/failed
+        if not items:
+            items = [
+                {"name": "Small Potion", "description": "A humble red tonic (+2 HP).", "cost": 20, "effects": [{"stat":"hp","amount":2}]},
+                {"name": "Iron Dagger", "description": "A simple blade (+1 ATK).", "cost": 60, "effects": [{"stat":"atk","amount":1}]},
+                {"name": "Leather Vest", "description": "Worn but comfy (+1 DEF).", "cost": 60, "effects": [{"stat":"def","amount":1}]},
+            ]
+
+        # Cache for the day
+        self._shop_cache_set(guild_id, items)
+        return items
+
+    def embed_shop(self, user_id: int, guild_id: int, items: List[Dict[str, Any]]) -> discord.Embed:
         u = self.get_user(user_id, guild_id)
-        lines = [f"• **{n}** — {c} coins ({eff}+{v})" for (n, c, eff, v) in SHOP_STOCK]
+        lines = []
+        for idx, it in enumerate(items, start=1):
+            eff_txt = ", ".join([f"{e['stat'].upper()}+{e['amount']}" for e in it["effects"]])
+            lines.append(f"**{idx}. {it['name']}** — {it['cost']}c\n*{it['description']}*\n_{eff_txt}_")
         e = discord.Embed(
-            title="🛒 The Little Goblin Shop",
-            description="\n".join(lines),
+            title="🛒 The Goblin Curio (AI Rotating Shop)",
+            description="\n\n".join(lines),
             color=discord.Color.green()
         )
-        e.set_footer(text=f"You have {u['coins']} coins.")
+        e.set_footer(text=f"You have {u['coins']} coins. Shop rotates daily.")
         return e
 
-    def embed_training(self, user_id: int, guild_id: int) -> discord.Embed:
-        u = self.get_user(user_id, guild_id)
-        e = discord.Embed(
-            title="🥊 Training Ring",
-            description="Pay **15 coins** and roll 2d6 to raise a random stat (+1~+3). 45s cooldown.",
-            color=discord.Color.orange()
-        )
-        e.set_footer(text=f"Coins: {u['coins']}")
-        return e
-
-    def embed_gamble(self) -> discord.Embed:
-        return discord.Embed(
-            title="🎲 Gambling Hall",
-            description="• Roll d20: 10 coin bet. 15+ pays 25, 20 pays 50.\n• Coinflip: 10 coin bet. Win pays 20.\n10s cooldown.",
-            color=discord.Color.purple()
-        )
-
-    # ---------- Actions ----------
+    # ===== XP/Level =====
     async def add_xp_and_level(self, user_id: int, guild_id: int, gained: int) -> str:
         u = self.get_user(user_id, guild_id)
         xp = u["xp"] + gained
         lvl = u["lvl"]
-        # Simple curve: next level at 100 * lvl
         ding = False
         while xp >= 100 * lvl:
             xp -= 100 * lvl
@@ -328,80 +302,93 @@ class RPGCog(commands.Cog):
         self.set_user(user_id, guild_id, xp=xp, lvl=lvl)
         return f"**+{gained} XP**" + (" — **LEVEL UP!** 🎉" if ding else "")
 
-    def handle_purchase(self, user_id: int, guild_id: int, item_name: str) -> discord.Embed:
-        stock = {n: (cost, eff, val) for (n, cost, eff, val) in SHOP_STOCK}
-        if item_name not in stock:
-            return discord.Embed(title="Shop", description="That item is not available.", color=discord.Color.red())
-        cost, eff, val = stock[item_name]
+    # ===== Shop purchase =====
+    def apply_effects(self, user_id: int, guild_id: int, effects: List[Dict[str, int]]):
         u = self.get_user(user_id, guild_id)
-        if u["coins"] < cost:
-            return discord.Embed(title="Shop", description="You don't have enough coins.", color=discord.Color.red())
-        # Take coins, apply effect immediately (and give item for flavor)
-        coins = u["coins"] - cost
-        updates = {"coins": coins}
-        if eff == "hp":
-            updates["hp"] = max(1, u["hp"] + val)
-        elif eff == "atk":
-            updates["atk"] = u["atk"] + val
-        elif eff == "def":
-            updates["def"] = u["def"] + val
-        elif eff == "xp":
-            # XP effect handled via add_xp_and_level for ding message
-            pass
-        self.set_user(user_id, guild_id, **updates)
-        self.inv_add(user_id, guild_id, item_name, 1)
+        updates = {}
+        for e in effects:
+            stat = e["stat"]
+            amt = int(e["amount"])
+            if stat == "hp":
+                updates["hp"] = max(1, u["hp"] + amt + updates.get("hp", 0) - u["hp"])
+                # simpler: accumulate directly
+                updates["hp"] = u["hp"] + amt if "hp" not in updates else updates["hp"] + amt
+            elif stat == "atk":
+                updates["atk"] = u["atk"] + amt if "atk" not in updates else updates["atk"] + amt
+            elif stat == "def":
+                updates["def"] = u["def"] + amt if "def" not in updates else updates["def"] + amt
+        if updates:
+            self.set_user(user_id, guild_id, **updates)
 
-        extra = ""
-        if eff == "xp":
-            extra = f"\n{asyncio.run(self.add_xp_and_level(user_id, guild_id, val))}"
-        msg = f"Purchased **{item_name}** for **{cost}** coins. {('Effect: ' + eff + f' +{val}') if eff!='xp' else 'Gained XP!'}{extra}"
-        return discord.Embed(title="🛒 Purchase Complete", description=msg, color=discord.Color.green())
+    def embed_inventory_after_buy(self, user_id: int, guild_id: int, item_name: str, cost: int, effs: List[Dict[str,int]]) -> discord.Embed:
+        eff_txt = ", ".join([f"{e['stat'].upper()}+{e['amount']}" for e in effs])
+        u = self.get_user(user_id, guild_id)
+        desc = f"Purchased **{item_name}** for **{cost}** coins.\nApplied: _{eff_txt}_\n\nCoins left: **{u['coins']}**"
+        return discord.Embed(title="🛒 Purchase Complete", description=desc, color=discord.Color.green())
 
+    # ===== Activities =====
     async def do_mine(self, user_id: int, guild_id: int) -> discord.Embed:
         u = self.get_user(user_id, guild_id)
         now = _now()
         cd = max(0, u["last_mine"] + MINE_COOLDOWN - now)
         if cd > 0:
-            return discord.Embed(title="⛏️ Mine", description=f"You're tired. Try again in **{cd}s**.", color=discord.Color.red())
+            return discord.Embed(title="⛏️ Resting", description=f"Try again in **{cd}s**.", color=discord.Color.red())
         payout = random.randint(12, 28)
         self.set_user(user_id, guild_id, coins=u["coins"] + payout, last_mine=now)
-        return discord.Embed(
-            title="⛏️ Mine",
-            description=f"You dig for a bit and earn **{payout}** coins.",
-            color=discord.Color.dark_teal()
+
+        # AI flavor line (optional)
+        line = "You chip away at a glittering seam and pocket a few nuggets."
+        data = await self._ai_chat_json(
+            "You write one short vivid line for a fantasy mine/work action.",
+            "Give one line describing the scene. Keys: {line:str}"
         )
+        if data and "line" in data:
+            line = str(data["line"])[:200]
+
+        return discord.Embed(title="⛏️ Mine", description=f"{line}\n\nYou earn **{payout}** coins.", color=discord.Color.dark_teal())
 
     async def do_train(self, user_id: int, guild_id: int) -> discord.Embed:
         u = self.get_user(user_id, guild_id)
         now = _now()
         cd = max(0, u["last_train"] + TRAIN_COOLDOWN - now)
         if cd > 0:
-            return discord.Embed(title="🥵 Rest Up", description=f"Training cooldown: **{cd}s**.", color=discord.Color.red())
+            return discord.Embed(title="🥵 Rest Up", description=f"Training in **{cd}s**.", color=discord.Color.red())
         if u["coins"] < 15:
             return discord.Embed(title="🥊 Training", description="You need **15** coins.", color=discord.Color.red())
 
-        # Pay and roll improvements
+        # Pay and improve random stat
         coins = u["coins"] - 15
         stat = random.choice(["hp", "atk", "def"])
         gain = random.randint(1, 3)
-        updates = {"coins": coins, "last_train": now, stat: max(1, u[stat] + gain)}
-        self.set_user(user_id, guild_id, **updates)
+        new_vals = {"coins": coins, "last_train": now}
+        if stat == "hp":
+            new_vals["hp"] = u["hp"] + gain
+        elif stat == "atk":
+            new_vals["atk"] = u["atk"] + gain
+        else:
+            new_vals["def"] = u["def"] + gain
+        self.set_user(user_id, guild_id, **new_vals)
         xp_text = await self.add_xp_and_level(user_id, guild_id, random.randint(8, 15))
 
-        return discord.Embed(
-            title="🏋️ Training Complete",
-            description=f"You focused on **{stat.upper()}** and gained **+{gain}**.\n{xp_text}",
-            color=discord.Color.orange()
+        # AI coach line
+        coach = "The grizzled coach nods with approval."
+        data = await self._ai_chat_json(
+            "You are a colorful RPG trainer. Output JSON {line:str}.",
+            f"Player increased {stat.upper()} by {gain}. Give one energetic line."
         )
+        if data and "line" in data:
+            coach = str(data["line"])[:200]
+
+        return discord.Embed(title="🏋️ Training Complete", description=f"{coach}\n{xp_text}", color=discord.Color.orange())
 
     async def do_roll(self, user_id: int, guild_id: int) -> discord.Embed:
         u = self.get_user(user_id, guild_id)
         now = _now()
         cd = max(0, u["last_gamble"] + GAMBLE_COOLDOWN - now)
         if cd > 0:
-            return discord.Embed(title="⏱️ Cooldown", description=f"Gambling available in **{cd}s**.", color=discord.Color.red())
+            return discord.Embed(title="⏱️ Cooldown", description=f"Gambling in **{cd}s**.", color=discord.Color.red())
         if u["coins"] < 10:
-            return discord.Embed(title="🎲 Roll d20", description="You need **10** coins to bet.", color=discord.Color.red())
+            return discord.Embed(title="🎲 Roll d20", description="Need **10** coins.", color=discord.Color.red())
 
         roll = random.randint(1, 20)
         coins = u["coins"] - 10
@@ -413,11 +400,16 @@ class RPGCog(commands.Cog):
         coins += payout
         self.set_user(user_id, guild_id, coins=coins, last_gamble=now)
 
+        dealer = "The dealer taps the table, unreadable."
+        data = await self._ai_chat_json(
+            "You are a dry, witty casino dealer NPC. Output JSON {line:str}.",
+            f"Player rolled {roll}. Emote a short one-liner."
+        )
+        if data and "line" in data:
+            dealer = str(data["line"])[:200]
+
         desc = f"You rolled **d20 = {roll}**.\n"
-        if payout > 0:
-            desc += f"Winner! You receive **{payout}** coins."
-        else:
-            desc += "No luck this time."
+        desc += f"{'Winner! You receive **' + str(payout) + '** coins.' if payout > 0 else 'No luck this time.'}\n\n{dealer}"
         return discord.Embed(title="🎲 d20 Result", description=desc, color=discord.Color.purple())
 
     async def do_coinflip(self, user_id: int, guild_id: int) -> discord.Embed:
@@ -425,17 +417,26 @@ class RPGCog(commands.Cog):
         now = _now()
         cd = max(0, u["last_gamble"] + GAMBLE_COOLDOWN - now)
         if cd > 0:
-            return discord.Embed(title="⏱️ Cooldown", description=f"Gambling available in **{cd}s**.", color=discord.Color.red())
+            return discord.Embed(title="⏱️ Cooldown", description=f"Gambling in **{cd}s**.", color=discord.Color.red())
         if u["coins"] < 10:
-            return discord.Embed(title="🪙 Coinflip", description="You need **10** coins to bet.", color=discord.Color.red())
+            return discord.Embed(title="🪙 Coinflip", description="Need **10** coins.", color=discord.Color.red())
 
         side = random.choice(["Heads", "Tails"])
         win = random.choice([True, False])
         coins = u["coins"] - 10 + (20 if win else 0)
         self.set_user(user_id, guild_id, coins=coins, last_gamble=now)
+
+        quip = "The coin dances end over end."
+        data = await self._ai_chat_json(
+            "You narrate coinflips wryly. Output JSON {line:str}.",
+            f"The coin shows {side}. Player {'wins' if win else 'loses'}."
+        )
+        if data and "line" in data:
+            quip = str(data["line"])[:200]
+
         return discord.Embed(
             title="🪙 Coinflip",
-            description=f"The coin shows **{side}** — you **{'WIN' if win else 'lose'}**.",
+            description=f"The coin shows **{side}** — you **{'WIN' if win else 'lose'}**.\n{quip}",
             color=discord.Color.purple()
         )
 
@@ -444,61 +445,228 @@ class RPGCog(commands.Cog):
         now = _now()
         cd = max(0, u["last_adventure"] + ADVENTURE_COOLDOWN - now)
         if cd > 0:
-            return discord.Embed(title="🗺️ Resting", description=f"You can adventure again in **{cd}s**.", color=discord.Color.red())
+            return discord.Embed(title="🗺️ Resting", description=f"Adventure in **{cd}s**.", color=discord.Color.red())
 
-        # Generate an encounter
-        enemies = [
-            ("Tunnel Rat", 10, 3, 1, 15, (8, 16)),
-            ("Mischief Slime", 14, 4, 2, 18, (10, 20)),
-            ("Roadside Bandit", 18, 5, 3, 22, (12, 25)),
-        ]
-        name, ehp, eatk, edef, xp_reward, coin_rng = random.choice(enemies)
+        # Ask AI for encounter (with JSON)
+        sys_p = (
+            "You are a balanced encounter generator for a text RPG. "
+            "Respond as JSON: {enemy:{name:str, hp:int, atk:int, def:int, description:str(<=180)}, "
+            "scene:str(<=140)}"
+        )
+        user_p = f"Player stats: HP {u['hp']}, ATK {u['atk']}, DEF {u['def']}, LVL {u['lvl']}.\n"
+        data = await self._ai_chat_json(sys_p, user_p)
 
-        # simple round: player and enemy each roll d20 + atk, minus opponent def
+        # Defaults if AI unavailable
+        enemy = {"name":"Mischief Slime","hp":14,"atk":4,"def":2,"description":"A gelatinous prankster wobbles into view."}
+        scene = "A crooked path through mossy stones."
+        if data:
+            if isinstance(data.get("enemy"), dict):
+                e = data["enemy"]
+                enemy["name"] = str(e.get("name", enemy["name"]))[:60]
+                enemy["hp"] = max(MIN_ENEMY_HP, min(int(e.get("hp", enemy["hp"])), MAX_ENEMY_HP))
+                enemy["atk"] = max(1, min(int(e.get("atk", enemy["atk"])), MAX_ENEMY_STAT))
+                enemy["def"] = max(0, min(int(e.get("def", enemy["def"])), MAX_ENEMY_STAT))
+                enemy["description"] = str(e.get("description", enemy["description"]))[:180]
+            if isinstance(data.get("scene"), str):
+                scene = str(data["scene"])[:140]
+
+        # Resolve a quick round with stats
         p_roll = random.randint(1, 20) + u["atk"]
-        e_roll = random.randint(1, 20) + eatk
-        p_score = max(1, p_roll - edef)
+        e_roll = random.randint(1, 20) + enemy["atk"]
+        p_score = max(1, p_roll - enemy["def"])
         e_score = max(1, e_roll - u["def"])
 
         result_lines = [
-            f"You encounter **{name}**!",
-            f"Your strike total: **{p_roll} - {edef} = {p_score}**",
-            f"{name} strike total: **{e_roll} - {u['def']} = {e_score}**",
+            f"**Scene:** {scene}",
+            f"You encounter **{enemy['name']}** — {enemy['description']}",
+            f"Your strike total: **{p_roll} - {enemy['def']} = {p_score}**",
+            f"{enemy['name']} strike total: **{e_roll} - {u['def']} = {e_score}**",
         ]
 
         coins = u["coins"]
         if p_score >= e_score:
-            won = True
-            xp_text = await self.add_xp_and_level(user_id, guild_id, xp_reward)
-            coin_gain = random.randint(*coin_rng)
+            xp_reward = random.randint(16, 26)
+            coin_gain = random.randint(12, 26)
             coins += coin_gain
-            result_lines.append(f"**Victory!** You earn **{coin_gain}** coins. {xp_text}")
+            self.set_user(user_id, guild_id, coins=coins, last_adventure=now)
+            xp_text = await self.add_xp_and_level(user_id, guild_id, xp_reward)
+            result_lines.append(f"**Victory!** +**{coin_gain}** coins. {xp_text}")
+            color = discord.Color.brand_green()
         else:
-            won = False
-            # Take a small HP knock (not lethal), minimum 1 HP
-            hp_loss = random.randint(1, 4)
-            new_hp = max(1, u["hp"] - hp_loss)
-            self.set_user(user_id, guild_id, hp=new_hp)
+            # small hp nick
+            hp_loss = random.randint(1, 5)
+            self.set_user(user_id, guild_id, hp=max(1, u["hp"] - hp_loss), last_adventure=now)
             result_lines.append(f"**Defeat.** You lose **{hp_loss} HP** (non-lethal).")
+            color = discord.Color.red()
 
-        self.set_user(user_id, guild_id, coins=coins, last_adventure=now)
-
-        color = discord.Color.brand_green() if won else discord.Color.red()
         return discord.Embed(title="🗺️ Adventure", description="\n".join(result_lines), color=color)
 
-    # ---------- Slash Command ----------
-    @app_commands.command(name="rpg", description="Open the fun games menu: profile, shop, training, mine, gambling, adventure.")
+    # ===== Views / Menu =====
+    class MainView(discord.ui.View):
+        def __init__(self, cog: "AIRPGCog", user_id: int):
+            super().__init__(timeout=180)
+            self.cog = cog
+            self.user_id = str(user_id)
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            return str(interaction.user.id) == self.user_id
+
+        @discord.ui.select(
+            placeholder="Choose an activity…",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(label="Profile", description="View your stats & wallet", emoji="🧙"),
+                discord.SelectOption(label="Inventory", description="Your items", emoji="🎒"),
+                discord.SelectOption(label="Shop", description="AI-rotating stock", emoji="🛒"),
+                discord.SelectOption(label="Training Ring", description="Boost a stat", emoji="🥊"),
+                discord.SelectOption(label="Mine / Work", description="Earn wages", emoji="⛏️"),
+                discord.SelectOption(label="Gambling", description="d20 / coinflip", emoji="🎲"),
+                discord.SelectOption(label="Adventure", description="AI encounter", emoji="🗺️"),
+            ]
+        )
+        async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
+            choice = select.values[0]
+            if choice == "Profile":
+                await interaction.response.edit_message(embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id), view=self)
+            elif choice == "Inventory":
+                await interaction.response.edit_message(embed=self.cog.embed_inventory(interaction.user.id, interaction.guild_id), view=self)
+            elif choice == "Shop":
+                # derive avg lvl to bias shop slightly
+                u = self.cog.get_user(interaction.user.id, interaction.guild_id)
+                items = await self.cog.get_ai_shop(interaction.guild_id, avg_player_lvl=u["lvl"])
+                await interaction.response.edit_message(embed=self.cog.embed_shop(interaction.user.id, interaction.guild_id, items), view=AIRPGCog.ShopView(self.cog, self.user_id, items))
+            elif choice == "Training Ring":
+                await interaction.response.edit_message(embed=discord.Embed(
+                    title="🥊 Training Ring",
+                    description="Pay **15** coins to train (+1~+3 to a random stat). 45s cooldown.",
+                    color=discord.Color.orange()), view=AIRPGCog.TrainView(self.cog, self.user_id))
+            elif choice == "Mine / Work":
+                result = await self.cog.do_mine(interaction.user.id, interaction.guild_id)
+                await interaction.response.edit_message(embed=result, view=self)
+            elif choice == "Gambling":
+                embed = discord.Embed(
+                    title="🎲 Gambling Hall",
+                    description="• Roll d20 (bet 10): 15+ pays 25, 20 pays 50.\n• Coinflip (bet 10): Win pays 20.\n10s cooldown.",
+                    color=discord.Color.purple()
+                )
+                await interaction.response.edit_message(embed=embed, view=AIRPGCog.GambleView(self.cog, self.user_id))
+            elif choice == "Adventure":
+                result = await self.cog.do_adventure(interaction.user.id, interaction.guild_id)
+                await interaction.response.edit_message(embed=result, view=self)
+
+    class ShopView(discord.ui.View):
+        def __init__(self, cog: "AIRPGCog", user_id: str, items: List[Dict[str, Any]]):
+            super().__init__(timeout=150)
+            self.cog = cog
+            self.user_id = user_id
+            self.items = items
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            return str(interaction.user.id) == self.user_id
+
+        @discord.ui.button(label="Buy #1", style=discord.ButtonStyle.primary)
+        async def buy1(self, interaction: discord.Interaction, _):
+            await self._buy(interaction, 0)
+
+        @discord.ui.button(label="Buy #2", style=discord.ButtonStyle.primary)
+        async def buy2(self, interaction: discord.Interaction, _):
+            await self._buy(interaction, 1)
+
+        @discord.ui.button(label="Buy #3", style=discord.ButtonStyle.primary)
+        async def buy3(self, interaction: discord.Interaction, _):
+            await self._buy(interaction, 2)
+
+        @discord.ui.button(label="Buy #4", style=discord.ButtonStyle.secondary)
+        async def buy4(self, interaction: discord.Interaction, _):
+            await self._buy(interaction, 3)
+
+        @discord.ui.button(label="Buy #5", style=discord.ButtonStyle.secondary)
+        async def buy5(self, interaction: discord.Interaction, _):
+            await self._buy(interaction, 4)
+
+        @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+        async def back(self, interaction: discord.Interaction, _):
+            await interaction.response.edit_message(
+                embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
+                view=AIRPGCog.MainView(self.cog, interaction.user.id)
+            )
+
+        async def _buy(self, interaction: discord.Interaction, idx: int):
+            if idx >= len(self.items):
+                await interaction.response.send_message("That slot is empty today.", ephemeral=True)
+                return
+            item = self.items[idx]
+            u = self.cog.get_user(interaction.user.id, interaction.guild_id)
+            if u["coins"] < item["cost"]:
+                await interaction.response.send_message("You don't have enough coins.", ephemeral=True)
+                return
+            # pay & apply effects
+            self.cog.set_user(interaction.user.id, interaction.guild_id, coins=u["coins"] - item["cost"])
+            self.cog.inv_add(interaction.user.id, interaction.guild_id, item["name"], 1)
+            self.cog.apply_effects(interaction.user.id, interaction.guild_id, item["effects"])
+
+            embed = self.cog.embed_inventory_after_buy(interaction.user.id, interaction.guild_id, item["name"], item["cost"], item["effects"])
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    class TrainView(discord.ui.View):
+        def __init__(self, cog: "AIRPGCog", user_id: str):
+            super().__init__(timeout=120)
+            self.cog = cog
+            self.user_id = user_id
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            return str(interaction.user.id) == self.user_id
+
+        @discord.ui.button(label="Train (15c)", style=discord.ButtonStyle.success, emoji="🏋️")
+        async def train(self, interaction: discord.Interaction, _):
+            embed = await self.cog.do_train(interaction.user.id, interaction.guild_id)
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+        async def back(self, interaction: discord.Interaction, _):
+            await interaction.response.edit_message(
+                embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
+                view=AIRPGCog.MainView(self.cog, interaction.user.id)
+            )
+
+    class GambleView(discord.ui.View):
+        def __init__(self, cog: "AIRPGCog", user_id: str):
+            super().__init__(timeout=120)
+            self.cog = cog
+            self.user_id = user_id
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            return str(interaction.user.id) == self.user_id
+
+        @discord.ui.button(label="Roll d20 (10c)", style=discord.ButtonStyle.primary, emoji="🎲")
+        async def d20(self, interaction: discord.Interaction, _):
+            embed = await self.cog.do_roll(interaction.user.id, interaction.guild_id)
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        @discord.ui.button(label="Coinflip (10c)", style=discord.ButtonStyle.primary, emoji="🪙")
+        async def coinflip(self, interaction: discord.Interaction, _):
+            embed = await self.cog.do_coinflip(interaction.user.id, interaction.guild_id)
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+        async def back(self, interaction: discord.Interaction, _):
+            await interaction.response.edit_message(
+                embed=self.cog.embed_profile(interaction.user.id, interaction.guild_id),
+                view=AIRPGCog.MainView(self.cog, interaction.user.id)
+            )
+
+    # ===== Slash command =====
+    @app_commands.command(name="rpg", description="Open the AI-powered RPG menu (shop, training, mine, gambling, adventure).")
     @app_commands.guild_only()
     async def rpg(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        # Respect bot-wide allowed_mentions coming from your main file
         embed = self.embed_profile(interaction.user.id, interaction.guild_id)
+        # Respect your bot's global allowed_mentions
         await interaction.followup.send(
             embed=embed,
-            view=RPGView(self, interaction.user.id),
+            view=AIRPGCog.MainView(self, interaction.user.id),
             allowed_mentions=interaction.client.allowed_mentions
         )
 
-
 async def setup(bot: commands.Bot):
-    await bot.add_cog(RPGCog(bot))
+    await bot.add_cog(AIRPGCog(bot))
