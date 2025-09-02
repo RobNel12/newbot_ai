@@ -66,6 +66,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # ====== OpenAI Client ======
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+bot.openai_client = openai_client
+
+
 # ============== SANITIZE ===============
 def sanitize_content(content: str) -> str:
     """Remove or replace blocklisted words before storing in memory."""
