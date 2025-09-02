@@ -99,6 +99,8 @@ bot = commands.Bot(
     allowed_mentions=default_allowed_mentions,  # NEW
 )
 
+bot.openai_client = openai_client
+
 INSTANT_SYNC_GUILD_ID = 1304124705896136744
 
 # ====== SQLite Setup ======
