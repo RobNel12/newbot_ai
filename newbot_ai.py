@@ -380,6 +380,7 @@ async def forget_memory(interaction: discord.Interaction, scope: str, target_id:
 # ====== Start ======
 async def load_cogs():
     await bot.load_extension("cogs.poem")
+    await bot.load_extension("cogs.rpg")
 
 async def main():
     await load_cogs()
