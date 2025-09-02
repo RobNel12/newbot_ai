@@ -316,7 +316,7 @@ class RPGCog(commands.Cog):
                 new_atk += amt
             elif stat == "def":
                 new_def += amt
-        self.set_user(user_id, guild_id, hp=max(1, new_hp), atk=new_atk, {"def":new_def})
+        self.set_user(user_id, guild_id, hp=max(1, new_hp), atk=new_atk, **{"def":new_def})
 
     # ---------- Activities ----------
     async def do_mine(self, user_id: int, guild_id: int) -> discord.Embed:
