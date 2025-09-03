@@ -209,7 +209,7 @@ class AIAudio(commands.Cog):
 
     # -------------------------------- Commands -------------------------------- #
 
-    @app_commands.command(name="tts", description="Generate a short TTS clip from an AI prompt.")
+    @app_commands.command(name="generate_tts", description="Generate a short TTS clip from an AI prompt.")
     @app_commands.describe(
         prompt="What should the clip say?",
         name="Short name for the clip (used for file/soundboard).",
@@ -217,7 +217,7 @@ class AIAudio(commands.Cog):
         fmt="Audio format (mp3 or wav).",
         add_to_soundboard="Try adding as a native Soundboard sound (if supported).",
     )
-    async def tts(
+    async def generate_tts(
         self,
         interaction: discord.Interaction,
         prompt: str,
